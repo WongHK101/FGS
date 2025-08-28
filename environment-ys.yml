@@ -1,0 +1,21 @@
+name: gs
+channels:
+  - nvidia   
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - cudatoolkit=11.8
+  - plyfile
+  - python=3.8
+  - pip=22.3.1
+  - pytorch=2.0.0
+  - torchaudio=2.0.0
+  - torchvision=0.15.1
+  - tqdm
+  - pip:
+    - submodules/diff-gaussian-rasterization
+    - submodules/simple-knn
+    - submodules/fused-ssim
+    - opencv-python
+    - joblib

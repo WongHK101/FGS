@@ -1,0 +1,130 @@
+结论：下列是官方仓库脚本的**可调参数全集**，按环节归类，含含义与默认值（能在 README 明确写出的给出确切默认；其余以代码为准且不同版本可能略有差异）。科研复现实用开关在文末。来源见每节尾注。
+
+# 训练：`train.py`
+
+必选与数据相关
+
+* `-s, --source_path`：COLMAP 或 NeRF-Synthetic 数据根目录。
+* `-m, --model_path`：输出模型目录，默认写入 `output/<随机名>`。([GitHub][1])
+
+数据与载入
+
+* `-i, --images`：COLMAP 图像子目录名，默认 `images`。
+* `--depths`：深度图目录；配合 `--depth_l1_weight_*` 使用。
+* `-r, --resolution`：载入分辨率。`1,2,4,8` 表示原图、½、¼、⅛；其他数值表示按宽度等比缩放。默认 `1`。
+* `-w, --white_background`：白底渲染，默认黑底。
+* `--data_device`：`cuda` 或 `cpu`，默认 `cuda`。
+* `--eval`：按 MipNeRF360 规则做固定 train/test 划分（每第 8 张做 test）。默认关闭。([GitHub][1])
+
+迭代与断点
+
+* `--iterations`：训练迭代数（常见默认 30k）。
+* `--start_checkpoint`：从 `.pth` 断点续训。
+* `--checkpoint_iterations`：在给定迭代保存 `.pth`。
+* `--save_iterations`：在给定迭代导出 `.ply`。
+* `--test_iterations`：在给定迭代渲染整套视角到磁盘（供 `metrics.py` 用）。([GitHub][1])
+
+学习率（核心超参）
+
+* `--position_lr_init` / `--position_lr_final`：三维位置学习率，默认 `1.6e-5 / 1.6e-6`（以代码为准）。
+* `--position_lr_delay_mult`：Plenoxels 风格 warm-up 衰减，默认 `0.01`。
+* `--position_lr_max_steps`：位置 LR 计划的最大步数。
+* `--feature_lr`：SH 特征学习率。
+* `--opacity_lr`：不透明度学习率。
+* `--scaling_lr`：各向异性尺度学习率。
+* `--rotation_lr`：旋转（四元数/球面）学习率。
+* `--exposure_lr_init / --exposure_lr_final / --exposure_lr_delay_steps / --exposure_lr_delay_mult`：相机曝光标定的 LR 计划；需配合 `--train_test_exp` 开启曝光优化。推荐值示例：`0.001 / 0.0001 / 5000 / 0.001`。([GitHub][1])
+
+密度控制（点数增长相关）
+
+* `--densify_from_iter`：开始增殖迭代，默认 `500`。
+* `--densify_until_iter`：停止增殖迭代，默认 `15000`。
+* `--densification_interval`：增殖周期，默认 `100`。
+* `--opacity_reset_interval`：不透明度重置周期，默认 `3000`。
+* `--densify_grad_threshold`：按 2D 梯度的增殖阈值，默认 `0.0002`。
+* `--percent_dense`：基于场景尺度的强制增殖下限，默认 `0.01`。
+* `--lambda_dssim`：SSIM 权重，默认 `0.2`。([GitHub][1])
+
+渲染管线与数值
+
+* `--sh_degree`：SH 阶数，默认 `3`（不超过 3）。
+* `--convert_SHs_python`：用 PyTorch 版本的 SH 前后向。
+* `--compute_cov3D_python`：用 PyTorch 版本的 3D 协方差前后向。
+* `--antialiasing`：开启 EWA 抗锯齿训练（亦可用于渲染）。默认关闭。([Gitee][2], [GitHub][1])
+
+优化器与加速
+
+* `--optimizer_type`：`default`(Adam，默认) 或 `sparse_adam`（需安装加速 rasterizer）。官方加速统计：默认优化器约 ×1.6，加上 `sparse_adam` 约 ×2.7。注意加速版行为与原版略有不同。([GitHub][1])
+
+调试与远程查看
+
+* `--ip, --port`：与网络查看器通信地址。
+* `--disable_viewer`：关闭网络查看器。
+* `--debug` / `--debug_from` / `--detect_anomaly` / `--quiet`：调试与日志相关。([GitHub][1])
+
+# 渲染：`render.py`
+
+必选
+
+* `-m, --model_path`：模型目录。
+
+可选
+
+* `--skip_train` / `--skip_test`：跳过渲染训练集/测试集。
+* `--quiet`：静默。
+* 下列会自动从模型读取，亦可覆写：
+
+  * `-s, --source_path`；`-i, --images`；`--eval`；`-r, --resolution`；`-w, --white_background`；`--convert_SHs_python`；`--convert_cov3D_python`；`--antialiasing`。([GitHub][1])
+
+# 评测：`metrics.py`
+
+* `-m, --model_paths`：一个或多个模型目录；从 `<model>/<train|test>/ours_<iter>` 与 `gt` 读取并计算 PSNR/SSIM/LPIPS。([GitHub][1])
+
+# 一键评测流程：`full_eval.py`
+
+* `--skip_training` / `--skip_rendering` / `--skip_metrics`。
+* `--output_path`：结果目录，默认 `./eval` 或预训练模型位置。
+* 数据路径：`-m360, --mipnerf360`；`-tat, --tanksandtemples`；`-db, --deepblending`。([GitHub][1])
+
+# 数据转换：`convert.py`
+
+* `-s, --source_path`：输入根目录（`input/` 下为原图）。
+* `--camera`：前期匹配用相机模型，默认 `OPENCV`。
+* `--no_gpu`：禁用 COLMAP GPU。
+* `--skip_matching`：已有人为提供 COLMAP，跳过匹配，仅做去畸变与整理。
+* `--resize`：在 `images/ images_2/ images_4/ images_8` 生成四档尺寸；不加则只生成 `images`。
+* `--colmap_executable` / `--magick_executable`：可显式指定路径；若两者均已加入系统 PATH，仅需 `python convert.py -s <location> [--resize]`。([GitHub][1])
+
+# 查看器（SIBR）
+
+网络查看器 `SIBR_remoteGaussian_app`（与训练进程联动）
+
+* `--ip`, `--port`，`--rendering-size <w h>`，`--force-aspect-ratio`，`--load_images`，`-s/--path` 覆盖数据路径。([GitHub][1])
+
+本地实时查看器 `SIBR_gaussianViewer_app`
+
+* `-m, --model-path`；`--iteration`；`-s/--path`；`--rendering-size <w h>`；`--force-aspect-ratio`；`--load_images`；`--device`；`--no_interop`。([GitHub][1])
+
+# 默认值一览（官方 README 明确给出的）
+
+* 分辨率：`-r 1`；白底：默认关；`--images images`；`--eval`：默认关。
+* 位置学习率相关：`position_lr_final=1.6e-6`，`position_lr_delay_mult=0.01`。
+* 增殖：`densify_from_iter=500`，`densify_until_iter=15000`，`densification_interval=100`，`opacity_reset_interval=3000`，`densify_grad_threshold=0.0002`，`percent_dense=0.01`。
+* 损失：`lambda_dssim=0.2`。
+* 抗锯齿：默认关，可用 `--antialiasing` 开。
+* 渲染与查看器常用默认见各节。([GitHub][1])
+
+# 科研训练常用开关（复现实用）
+
+* 资源受限：`-r 2` 或 `images_2`；必要时 `-r 4/8`。
+* 评测复现：`--eval`，并在训练后用 `render.py` + `metrics.py`；或训练时仅设置少量 `--test_iterations`。
+* 断点与归档：`--checkpoint_iterations 30000`；需要中期 PLY 再加 `--save_iterations 7000 15000 30000`。
+* 大场景稳定：适当减小 `--position_lr_init`、`--scaling_lr`；或推迟/放缓增殖（如增大 `--densification_interval`，降低 `--densify_until_iter`）。
+* 画质抑锯齿：`--antialiasing`（训练与渲染一致）。
+* 曝光漂移数据：开启 `--train_test_exp` 并用推荐曝光 LR 计划。
+* 提速：安装加速 rasterizer，并用 `--optimizer_type sparse_adam`。([GitHub][1])
+
+> 备注：`train.py -h` 中还包含若干调试与设备参数；不同 commit 的默认值可能略有变动。以你当前仓库版本与 `-h` 输出为准；上文已给出官方 README 明确写出的默认与解释。([GitHub][1])
+
+[1]: https://github.com/graphdeco-inria/gaussian-splatting "GitHub - graphdeco-inria/gaussian-splatting: Original reference implementation of \"3D Gaussian Splatting for Real-Time Radiance Field Rendering\""
+[2]: https://gitee.com/zhoushifu/GaussianAvatars?utm_source=chatgpt.com "zhoushifu/GaussianAvatars"
