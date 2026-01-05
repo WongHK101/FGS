@@ -12,7 +12,7 @@ A resumable, one-command CLI runner for the end-to-end GeoTGS/FGS pipeline:
 6) Undistort thermal images using aligned sparse model (colmap image_undistorter)
 7) Normalize thermal_UD/sparse layout (move files into sparse/0 if needed)
 8) Stage-2 3DGS train (Thermal), render, metrics
-9) Blend RGB+Thermal models (blend_model_strict_endpoints_v4.py)
+9) Blend RGB+Thermal models (blend_model_strict_endpoints.py)
 10) Evaluate sweep (eval_blend_sweep.py, with optional auto_render)
 
 Key features vs the previous version:
@@ -26,7 +26,7 @@ Key features vs the previous version:
 Assumptions:
 - Put this file in the *root* of graphdeco-inria/gaussian-splatting repo,
   next to: train.py, render.py, metrics.py, and your helper scripts:
-  cfr.py / eval_crop_metrics.py / convert-gtgs.py / blend_model_strict_endpoints_v4.py / eval_blend_sweep.py
+  cfr.py / eval_crop_metrics.py / convert-gtgs.py / blend_model_strict_endpoints.py / eval_blend_sweep.py
 - Run this script using the same Python environment you use for 3DGS.
 """
 
@@ -782,7 +782,7 @@ def main() -> None:
         shutil.rmtree(model_f)
 
     blend_cmd = [
-        py, "blend_model_strict_endpoints_v4.py",
+        py, "blend_model_strict_endpoints.py",
         "--rgb_model_dir", str(model_rgb), "--rgb_iter", str(args.rgb_iter),
         "--t_model_dir", str(model_t), "--t_iter", str(args.t_iter),
         "--alphas", str(args.alphas),
