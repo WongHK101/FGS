@@ -1,0 +1,151 @@
+完整流程如下：
+01_cfr：<data_root>/fit/image/image-fit 和 .../image-exif 都存在且有图
+02_eval_crop：<data_root>/fit/metrics/summary_all.json 存在且非空
+03_prepare_input：<data_root>/input 存在且有图
+04_convert_gtgs：<data_root>/distorted/sparse_aligned 下能找到 cameras.bin/.txt
+05_train_rgb：<out_root>/Model_RGB/chkpnt{rgb_iter}.pth 存在
+06_render_rgb：<out_root>/Model_RGB/test 下存在渲染图
+07_metrics_rgb：<out_root>/Model_RGB/results.json 或 results.txt 存在
+08_undistort_thermal：<data_root>/thermal_UD/images 有图，且 thermal_UD/sparse 存在
+09_normalize_sparse_ud：<data_root>/thermal_UD/sparse/0 存在且含 cameras.*
+10_train_thermal：<out_root>/Model_T/chkpnt{t_iter}.pth 存在
+11_render_thermal：<out_root>/Model_T/test 下存在渲染图
+12_metrics_thermal：<out_root>/Model_T/results.json 或 results.txt 存在
+13_blend：<out_root>/Model_F 存在且下面有子文件夹（不同 alpha/method 输出）
+14_eval_sweep：<out_root>/eval/summary.csv 存在且非空
+# 一步到位命令：
+python run_gtgs_full_pipeline.py `
+  --data_root "F:\databackup\GeoTGS\input\PV-r4" `
+  --out_root  "F:\databackup\GeoTGS\output\PV-r4" `
+  --rgb_res 4 `
+  --t_res 4
+如只需要第8-14步
+python run_gtgs_full_pipeline.py `
+  --data_root "F:\databackup\GeoTGS\input\PV-r4" `
+  --out_root  "F:\databackup\GeoTGS\output\PV-r4" `
+  --rgb_res 4 `
+  --t_res 4 `
+  --from_step 8 `
+  --to_step 14
+
+# 逐步流程：
+# 第一步，处理RGB和T的FOV、分辨率不一致的问题：
+python cfr.py `
+  --rgb_dir "F:\databackup\GeoTGS\input\PV-r4\RGB" `
+  --th_dir  "F:\databackup\GeoTGS\input\PV-r4\thermal" `
+  --out_dir "F:\databackup\GeoTGS\input\PV-r4\fit" `
+  --comparison
+# 第二步，对fit和exif的结果进行评价：
+python eval_crop_metrics.py `
+  --th_dir   "F:\databackup\GeoTGS\input\PV-r4\thermal" `
+  --rgb_dir  "F:\databackup\GeoTGS\input\PV-r4\fit\image\image-fit" `
+  --rgb_dir  "F:\databackup\GeoTGS\input\PV-r4\fit\image\image-exif" `
+  --tag fit `
+  --tag exif `
+  --out_dir "F:\databackup\GeoTGS\input\PV-r4\fit\metrics"
+# 第三步，整理训练目录：
+# 依据第二步结果，自动比较fit和exif两种方法哪种更好，将对应图片拷贝到F:\databackup\GeoTGS\input\PV-r4\input中
+$root = "F:\databackup\GeoTGS\input\PV-r4"
+$summary = Join-Path $root "fit\metrics\summary_all.json"
+if (!(Test-Path $summary)) { throw "summary_all.json not found: $summary (请先跑第2步)" }
+$obj = Get-Content $summary -Raw | ConvertFrom-Json
+$cands = @($obj.candidates)
+if (!$cands -or $cands.Count -lt 1) { throw "No candidates in summary_all.json" }
+$cands = $cands | Where-Object { $_.count -gt 0 -and (Test-Path $_.rgb_dir) }
+if (!$cands -or $cands.Count -lt 1) { throw "All candidates invalid (count==0 or rgb_dir missing)" }
+function Score($v) {
+  if ($null -eq $v) { return -1e30 }
+  return [double]$v
+}
+$best = $cands | Sort-Object `
+  @{Expression={ Score $_.mean.edge_f1   }; Descending=$true}, `
+  @{Expression={ Score $_.mean.grad_ncc  }; Descending=$true}, `
+  @{Expression={ Score $_.mean.nmi       }; Descending=$true}, `
+  @{Expression={ Score $_.mean.edge_dice }; Descending=$true}, `
+  @{Expression={ Score $_.mean.mi        }; Descending=$true} `
+  | Select-Object -First 1
+$src = $best.rgb_dir
+$dst = Join-Path $root "input"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Get-ChildItem -Path $dst -File -Recurse -Include *.jpg,*.jpeg,*.png,*.tif,*.tiff,*.JPG,*.JPEG,*.PNG,*.TIF,*.TIFF `
+  -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Copy-Item -Path (Join-Path $src "*") -Destination $dst -Force
+Write-Host ("[OK] Selected tag: {0} | src: {1} -> dst: {2}" -f $best.tag, $src, $dst)
+# 第四步，COLMAP：
+python convert-gtgs.py `
+-s "F:\databackup\GeoTGS\input\PV-r4" `
+--mapper_multiple_models 1 `
+--min_model_size 5 `
+--init_min_num_inliers 50 `
+--abs_pose_min_num_inliers 20 `
+--camera SIMPLE_RADIAL `
+--matching spatial `
+--matcher_args "--SpatialMatching.max_num_neighbors=80 --SpatialMatching.max_distance=500" `
+--use_model_aligner `
+--model_aligner_args "--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0" `
+--prior_position_std_m 1.0
+# 第五步，一阶段训练：
+python train.py `
+  -s "F:\databackup\GeoTGS\input\PV-r4" `
+  --images images `
+  -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" `
+  -r 4 `
+  --iterations 30000 `
+  --checkpoint_iterations 30000 `
+  --data_device cuda `
+  --eval `
+  --densify_from_iter 1500 `
+  --densify_until_iter 10000 `
+  --densification_interval 300 `
+  --densify_grad_threshold 0.001 `
+  --lambda_dssim 0.3
+python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" -s "F:\databackup\GeoTGS\input\PV-r4"
+python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB"
+# 第六步，用第四步得到的稀疏模型去undistort thermal image：
+colmap image_undistorter `
+  --image_path "F:\databackup\GeoTGS\input\PV-r4\thermal" `
+  --input_path "F:\databackup\GeoTGS\input\PV-r4\distorted\sparse_aligned" `
+  --output_path "F:\databackup\GeoTGS\input\PV-r4\thermal_UD" `
+  --output_type COLMAP
+# 第七步：将thermal_UD\sparse内的文件移至0文件夹内:
+$src="F:\databackup\GeoTGS\input\PV-r4\thermal_UD\sparse"
+$dst=Join-Path $src "0"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Get-ChildItem -Path $src -File | Move-Item -Destination $dst -Force
+# 第八步，二阶段训练：
+python train.py `
+  -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD" `
+  -images images `
+  -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" `
+  --start_checkpoint "F:\databackup\GeoTGS\output\PV-r4\Model_RGB\chkpnt30000.pth" `
+  -r 4 `
+  --iterations 40000 `
+  --checkpoint_iterations 40000 `
+  --position_lr_init 0 --position_lr_final 0 `
+  --scaling_lr 0 --rotation_lr 0 `
+  --opacity_lr 0 `
+  --feature_lr 0.001 `
+  --densify_from_iter 999999 --densify_until_iter 0 `
+  --densification_interval 999999 --opacity_reset_interval 999999 `
+  --lambda_dssim 0.05 `
+  --eval
+python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD"
+python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T"
+# 第九步，模型融合：
+python blend_model_strict_endpoints_v4.py `
+  --rgb_model_dir "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" --rgb_iter 30000 `
+  --t_model_dir   "F:\databackup\GeoTGS\output\PV-r4\Model_T" --t_iter 40000 `
+  --alphas "0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1" `
+  --out_root "F:\databackup\GeoTGS\output\PV-r4\Model_F" `
+  --out_iter 40000 `
+  --methods sh_only sh_opacity sh_opacity_scale sh_opacity_geom all_float dc_ycc_only sh_opacity_dc_ycc `
+  --clean_out --verify_endpoints
+# 第十步，批量渲染+评价：
+python eval_blend_sweep.py `
+  --sweep_root "F:\databackup\GeoTGS\output\PV-r4\Model_F" `
+  --rgb_render "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" `
+  --t_render   "F:\databackup\GeoTGS\output\PV-r4\Model_T" `
+  --out_dir "F:\databackup\GeoTGS\output\PV-r4\eval" `
+  --auto_render
+
+
