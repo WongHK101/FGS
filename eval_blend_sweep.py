@@ -158,6 +158,186 @@ def corrcoef(a: np.ndarray, b: np.ndarray) -> float:
 
 
 # -----------------------------
+# Information / fusion metrics (source-referenced)
+# -----------------------------
+def _normalize01(a: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    a = a.astype(np.float32)
+    lo = float(np.percentile(a, 1))
+    hi = float(np.percentile(a, 99))
+    if hi - lo < eps:
+        lo = float(a.min())
+        hi = float(a.max())
+    if hi - lo < eps:
+        return np.zeros_like(a, dtype=np.float32)
+    return np.clip((a - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+
+
+def mutual_information(a: np.ndarray, b: np.ndarray, bins: int = 64) -> float:
+    """Mutual information between two scalar images (float)."""
+    a = _normalize01(a).reshape(-1)
+    b = _normalize01(b).reshape(-1)
+    h2, _, _ = np.histogram2d(a, b, bins=bins, range=[[0, 1], [0, 1]])
+    pxy = h2 / (np.sum(h2) + 1e-12)
+    px = np.sum(pxy, axis=1, keepdims=True)  # (bins,1)
+    py = np.sum(pxy, axis=0, keepdims=True)  # (1,bins)
+    denom = px @ py  # outer product (bins,bins)
+    nz = pxy > 0
+    mi = np.sum(pxy[nz] * np.log((pxy[nz] / (denom[nz] + 1e-12)) + 1e-12))
+    return float(mi)
+
+
+def normalized_mi(a: np.ndarray, b: np.ndarray, bins: int = 64) -> float:
+    """Normalized mutual information: (H(a)+H(b))/H(a,b)."""
+    a = _normalize01(a).reshape(-1)
+    b = _normalize01(b).reshape(-1)
+    h2, _, _ = np.histogram2d(a, b, bins=bins, range=[[0, 1], [0, 1]])
+    pxy = h2 / (np.sum(h2) + 1e-12)
+    px = np.sum(pxy, axis=1)
+    py = np.sum(pxy, axis=0)
+
+    def H(p: np.ndarray) -> float:
+        p = p[p > 0]
+        return float(-np.sum(p * np.log(p + 1e-12)))
+
+    ha = H(px)
+    hb = H(py)
+    hab = H(pxy.reshape(-1))
+    if hab < 1e-12:
+        return 0.0
+    return float((ha + hb) / hab)
+
+
+def spatial_frequency(img: np.ndarray) -> float:
+    """Spatial Frequency (SF) for a scalar image."""
+    img = img.astype(np.float32)
+    rf = img[1:, :] - img[:-1, :]
+    cf = img[:, 1:] - img[:, :-1]
+    RF = float(np.sqrt(np.mean(rf * rf) + 1e-12))
+    CF = float(np.sqrt(np.mean(cf * cf) + 1e-12))
+    return float(np.sqrt(RF * RF + CF * CF))
+
+
+def _vifp_ref_dist(ref: np.ndarray, dist: np.ndarray) -> float:
+    """
+    VIFp (pixel-domain) implementation for scalar images in [0,1].
+    Based on common public-domain implementations of Sheikh & Bovik VIF.
+    """
+    # Use scipy.ndimage for Gaussian filtering
+    try:
+        from scipy.ndimage import gaussian_filter  # type: ignore
+    except Exception:
+        return float("nan")
+
+    ref = _normalize01(ref).astype(np.float64)
+    dist = _normalize01(dist).astype(np.float64)
+
+    sigma_nsq = 2.0
+    eps = 1e-10
+    num = 0.0
+    den = 0.0
+
+    for scale in range(1, 5):
+        # filter size / sigma per scale (typical)
+        N = 2 ** (5 - scale) + 1
+        sd = N / 5.0
+
+        if scale > 1:
+            ref = ref[::2, ::2]
+            dist = dist[::2, ::2]
+
+        mu1 = gaussian_filter(ref, sd)
+        mu2 = gaussian_filter(dist, sd)
+
+        mu1_sq = mu1 * mu1
+        mu2_sq = mu2 * mu2
+        mu1_mu2 = mu1 * mu2
+
+        sigma1_sq = gaussian_filter(ref * ref, sd) - mu1_sq
+        sigma2_sq = gaussian_filter(dist * dist, sd) - mu2_sq
+        sigma12 = gaussian_filter(ref * dist, sd) - mu1_mu2
+
+        sigma1_sq = np.maximum(sigma1_sq, 0.0)
+        sigma2_sq = np.maximum(sigma2_sq, 0.0)
+
+        g = sigma12 / (sigma1_sq + eps)
+        sv_sq = sigma2_sq - g * sigma12
+
+        g = np.maximum(g, 0.0)
+        sv_sq = np.maximum(sv_sq, eps)
+
+        # where sigma1_sq is too small, set g=0
+        mask = sigma1_sq < eps
+        g[mask] = 0.0
+        sv_sq[mask] = sigma2_sq[mask]
+
+        # where sigma2_sq is too small, set sv_sq=eps
+        mask2 = sigma2_sq < eps
+        sv_sq[mask2] = eps
+
+        num += np.sum(np.log10(1.0 + (g * g) * sigma1_sq / (sv_sq + sigma_nsq)))
+        den += np.sum(np.log10(1.0 + sigma1_sq / sigma_nsq))
+
+    if den < eps:
+        return 0.0
+    return float(num / den)
+
+
+def _grad_mag_ori(a: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    a = a.astype(np.float32)
+    if cv2 is not None:
+        gx = cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=3)
+    else:
+        # simple finite difference
+        gx = np.zeros_like(a)
+        gy = np.zeros_like(a)
+        gx[:, 1:-1] = 0.5 * (a[:, 2:] - a[:, :-2])
+        gy[1:-1, :] = 0.5 * (a[2:, :] - a[:-2, :])
+    mag = np.sqrt(gx * gx + gy * gy) + 1e-12
+    ori = np.arctan2(gy, gx)
+    return mag, ori
+
+
+def qabf_metric(src_a: np.ndarray, src_b: np.ndarray, fused: np.ndarray) -> float:
+    """
+    QABF edge-based fusion metric (Xydeas & Petrovic style).
+    Works on scalar images in [0,1].
+    """
+    A = _normalize01(src_a)
+    B = _normalize01(src_b)
+    F = _normalize01(fused)
+
+    GA, OA = _grad_mag_ori(A)
+    GB, OB = _grad_mag_ori(B)
+    GF, OF = _grad_mag_ori(F)
+
+    # Gradient similarity
+    Tg = 0.85  # small constant to stabilize; typical implementations use values ~0.85
+    QgA = (2 * GA * GF + Tg) / (GA * GA + GF * GF + Tg)
+    QgB = (2 * GB * GF + Tg) / (GB * GB + GF * GF + Tg)
+
+    # Orientation similarity: normalized to [0,1]
+    dOA = np.abs(OA - OF)
+    dOB = np.abs(OB - OF)
+    dOA = np.minimum(dOA, np.pi - dOA)
+    dOB = np.minimum(dOB, np.pi - dOB)
+    QoA = 1.0 - (dOA / (np.pi / 2.0))
+    QoB = 1.0 - (dOB / (np.pi / 2.0))
+    QoA = np.clip(QoA, 0.0, 1.0)
+    QoB = np.clip(QoB, 0.0, 1.0)
+
+    QA = QgA * QoA
+    QB = QgB * QoB
+
+    # Weights based on source saliency (gradient magnitudes)
+    WA = GA
+    WB = GB
+    denom = np.sum(WA + WB) + 1e-12
+    q = float(np.sum(QA * WA + QB * WB) / denom)
+    return q
+
+
+# -----------------------------
 # Thermal scalar from pseudo-color images
 # -----------------------------
 def rgb_to_hsv(img: np.ndarray) -> np.ndarray:
@@ -576,6 +756,15 @@ def auto_render_methods(
 # Evaluation
 # -----------------------------
 def pair_by_name(a_dir: Path, b_dir: Path) -> List[Tuple[Path, Path]]:
+    """
+    Pair images in two folders.
+
+    Priority:
+      1) If filenames overlap, pair by exact filename intersection (stable, safest).
+      2) Otherwise fallback to index pairing by sorted filename order.
+
+    Returns list of (a_path, b_path).
+    """
     a = list_images(a_dir)
     b = list_images(b_dir)
     if not a or not b:
@@ -585,12 +774,48 @@ def pair_by_name(a_dir: Path, b_dir: Path) -> List[Tuple[Path, Path]]:
     names = sorted(set(a_map.keys()) & set(b_map.keys()))
     if names:
         return [(a_map[n], b_map[n]) for n in names]
-    # fallback: by index
     n = min(len(a), len(b))
     return list(zip(a[:n], b[:n]))
 
 
-def eval_render_ref(
+def pair_triple_by_name(m_dir: Path, rgb_dir: Path, t_dir: Path) -> List[Tuple[Path, Path, Path]]:
+    """
+    Pair images across 3 folders: method vs RGB-ref vs T-ref.
+
+    Priority:
+      1) intersection by exact filename across all 3
+      2) fallback by index (sorted order) across all 3
+    """
+    m = list_images(m_dir)
+    r = list_images(rgb_dir)
+    t = list_images(t_dir)
+    if not m or not r or not t:
+        return []
+    mm = {p.name: p for p in m}
+    rr = {p.name: p for p in r}
+    tt = {p.name: p for p in t}
+    names = sorted(set(mm.keys()) & set(rr.keys()) & set(tt.keys()))
+    if names:
+        return [(mm[n], rr[n], tt[n]) for n in names]
+    n = min(len(m), len(r), len(t))
+    return list(zip(m[:n], r[:n], t[:n]))
+
+
+def common_names(dirs: List[Path]) -> List[str]:
+    """Return sorted intersection of filenames across dirs (files with image extensions)."""
+    if not dirs:
+        return []
+    sets = []
+    for d in dirs:
+        imgs = list_images(d)
+        if not imgs:
+            return []
+        sets.append({p.name for p in imgs})
+    inter = set.intersection(*sets)
+    return sorted(inter)
+
+
+def eval_ref_bundle(
     method_renders: Path,
     rgb_renders: Path,
     t_renders: Path,
@@ -598,44 +823,150 @@ def eval_render_ref(
     thermal_align: str,
     sample_names: Optional[List[str]] = None,
 ) -> Dict[str, float]:
-    pairs_rgb = pair_by_name(method_renders, rgb_renders)
-    pairs_t = pair_by_name(method_renders, t_renders)
-    if not pairs_rgb or not pairs_t:
+    """
+    Teacher/source-referenced evaluation bundle.
+
+    We evaluate the fused render against:
+      - RGB teacher renders (RGB-ref): standard NVS metrics + structure (EdgeCorr on Y)
+      - Thermal teacher renders (T-ref): monotonic-invariant consistency on a scalar map S
+      - Fusion metrics (no fused GT): classic IR-VIS fusion metrics using scalar sources:
+           A = RGB luminance (Y),
+           B = Thermal scalar (normalized),
+           F = fused luminance (Y)
+
+    Pairing is done on the *triple filename intersection* (method, rgb_ref, t_ref),
+    to ensure all metrics are computed on the same set of frames.
+
+    If sample_names filters everything out, we fall back to all triples to avoid NaNs,
+    which otherwise make some strategies "disappear" in plots.
+    """
+    triples = pair_triple_by_name(method_renders, rgb_renders, t_renders)
+    if not triples:
         return {}
 
-    # restrict to intersection names if provided
     if sample_names is not None:
-        pairs_rgb = [(a, b) for (a, b) in pairs_rgb if a.name in sample_names]
-        pairs_t = [(a, b) for (a, b) in pairs_t if a.name in sample_names]
+        sset = set(sample_names)
+        triples_f = [(m, r, t) for (m, r, t) in triples if m.name in sset]
+        if triples_f:
+            triples = triples_f  # only apply if non-empty
 
-    ssim_y = []
-    edge_corr = []
-    sp_s = []
-    ssim_s = []
+    # RGB-ref metrics
+    psnr_list: List[float] = []
+    ssim_list: List[float] = []
+    lpips_list: List[float] = []
+    psnr_y_list: List[float] = []
+    ssim_y_list: List[float] = []
+    edgecorr_y_list: List[float] = []
 
-    for (m_img_p, rgb_p), (_, t_p) in zip(pairs_rgb, pairs_t):
+    # Thermal-ref metrics on scalar S
+    spearman_s_list: List[float] = []
+    ssim_s_list: List[float] = []
+    mi_s_list: List[float] = []
+    nmi_s_list: List[float] = []
+
+    # Fusion metrics (classic IR-VIS fusion metrics on scalar representations)
+    mi_f_total: List[float] = []
+    mi_f_rgb: List[float] = []
+    mi_f_t: List[float] = []
+    vif_total: List[float] = []
+    vif_rgb: List[float] = []
+    vif_t: List[float] = []
+    qabf_list: List[float] = []
+    sf_list: List[float] = []
+    ssim_f_total: List[float] = []
+    ssim_f_rgb: List[float] = []
+    ssim_f_t: List[float] = []
+
+    for (m_img_p, rgb_p, t_p) in triples:
         m = read_image_f32(m_img_p)
         rgb = read_image_f32(rgb_p)
         t = read_image_f32(t_p)
 
+        # ---------- RGB teacher metrics (image-level) ----------
+        psnr_list.append(psnr_rgb(m, rgb))
+        ssim_list.append(float(sk_ssim(m, rgb, channel_axis=2, data_range=1.0)))
+
+        v = lpips_rgb(m, rgb)
+        if v is not None:
+            lpips_list.append(v)
+
         my = rgb_to_y(m)
         rgby = rgb_to_y(rgb)
-        ssim_y.append(ssim_gray(my, rgby))
-        edge_corr.append(corrcoef(edge_map_y(my), edge_map_y(rgby)))
+        psnr_y_list.append(psnr_gray(my, rgby))
+        ssim_y_list.append(ssim_gray(my, rgby))
+        edgecorr_y_list.append(corrcoef(edge_map_y(my), edge_map_y(rgby)))
 
+        # ---------- Thermal teacher metrics (scalar map S) ----------
         ms = thermal_scalar(m, thermal_mode)
         ts = thermal_scalar(t, thermal_mode)
-        ms = align_scalar(ms, ts, mode=thermal_align)
+        ms_aligned = align_scalar(ms, ts, mode=thermal_align)
 
-        sp_s.append(spearman(ms, ts))
-        ssim_s.append(ssim_gray(np.clip(ms, 0, 1), np.clip(ts, 0, 1)))
+        spearman_s_list.append(spearman(ms_aligned, ts))
+        ssim_s_list.append(ssim_gray(_normalize01(ms_aligned), _normalize01(ts)))
+        mi_s_list.append(mutual_information(ms_aligned, ts))
+        nmi_s_list.append(normalized_mi(ms_aligned, ts))
 
-    return {
-        "SSIM_Y": float(np.mean(ssim_y)),
-        "EdgeCorr_Y": float(np.mean(edge_corr)),
-        "Spearman_S": float(np.mean(sp_s)),
-        "SSIM_S": float(np.mean(ssim_s)),
+        # ---------- Fusion metrics (no fused GT) ----------
+        # Sources: A=rgby (visible structure), B=thermal scalar (normalized),
+        # Fused:   F=my (fused luminance)
+        B = _normalize01(ts)
+        F = _normalize01(my)
+        A = _normalize01(rgby)
+
+        miA = mutual_information(F, A)
+        miB = mutual_information(F, B)
+        mi_f_rgb.append(miA)
+        mi_f_t.append(miB)
+        mi_f_total.append(miA + miB)
+
+        # VIF (pixel)
+        vA = _vifp_ref_dist(A, F)
+        vB = _vifp_ref_dist(B, F)
+        vif_rgb.append(vA)
+        vif_t.append(vB)
+        vif_total.append(vA + vB)
+
+        # QABF edge metric
+        qabf_list.append(qabf_metric(A, B, F))
+
+        # SF on fused
+        sf_list.append(spatial_frequency(F))
+
+        # SSIM source-referenced
+        sA = ssim_gray(F, A)
+        sB = ssim_gray(F, B)
+        ssim_f_rgb.append(sA)
+        ssim_f_t.append(sB)
+        ssim_f_total.append(0.5 * (sA + sB))
+
+    out: Dict[str, float] = {
+        # RGB-ref
+        "rgb_ref_PSNR": float(np.mean(psnr_list)),
+        "rgb_ref_SSIM": float(np.mean(ssim_list)),
+        "rgb_ref_PSNR_Y": float(np.mean(psnr_y_list)),
+        "rgb_ref_SSIM_Y": float(np.mean(ssim_y_list)),
+        "rgb_ref_EdgeCorr_Y": float(np.mean(edgecorr_y_list)),
+        # T-ref
+        "t_ref_Spearman_S": float(np.mean(spearman_s_list)),
+        "t_ref_SSIM_S": float(np.mean(ssim_s_list)),
+        "t_ref_MI_S": float(np.mean(mi_s_list)),
+        "t_ref_NMI_S": float(np.mean(nmi_s_list)),
+        # Fusion metrics
+        "fusion_MI_total": float(np.mean(mi_f_total)),
+        "fusion_MI_rgb": float(np.mean(mi_f_rgb)),
+        "fusion_MI_t": float(np.mean(mi_f_t)),
+        "fusion_VIF_total": float(np.mean(vif_total)),
+        "fusion_VIF_rgb": float(np.mean(vif_rgb)),
+        "fusion_VIF_t": float(np.mean(vif_t)),
+        "fusion_QABF": float(np.mean(qabf_list)),
+        "fusion_SF": float(np.mean(sf_list)),
+        "fusion_SSIM_total": float(np.mean(ssim_f_total)),
+        "fusion_SSIM_rgb": float(np.mean(ssim_f_rgb)),
+        "fusion_SSIM_t": float(np.mean(ssim_f_t)),
     }
+    if lpips_list:
+        out["rgb_ref_LPIPS"] = float(np.mean(lpips_list))
+    return out
 
 
 def eval_vs_gt(
@@ -643,18 +974,26 @@ def eval_vs_gt(
     gt_dir: Path,
     sample_names: Optional[List[str]] = None,
 ) -> Dict[str, float]:
+    """
+    Compare method renders against GT images (RGB GT).
+
+    If sample_names filters everything out, fall back to all pairs to avoid NaNs.
+    """
     pairs = pair_by_name(method_renders, gt_dir)
     if not pairs:
         return {}
 
     if sample_names is not None:
-        pairs = [(a, b) for (a, b) in pairs if a.name in sample_names]
+        sset = set(sample_names)
+        pairs_f = [(a, b) for (a, b) in pairs if a.name in sset]
+        if pairs_f:
+            pairs = pairs_f
 
-    psnr = []
-    ssim = []
-    lp = []
-    psnr_y = []
-    ssim_y = []
+    psnr: List[float] = []
+    ssim: List[float] = []
+    lp: List[float] = []
+    psnr_y: List[float] = []
+    ssim_y: List[float] = []
 
     for m_p, gt_p in pairs:
         m = read_image_f32(m_p)
@@ -681,7 +1020,6 @@ def eval_vs_gt(
         out["LPIPS"] = float(np.mean(lp))
     return out
 
-
 def sample_frame_names(ref_dir: Path, k: int, seed: int) -> List[str]:
     imgs = list_images(ref_dir)
     if not imgs:
@@ -697,6 +1035,14 @@ def sample_frame_names(ref_dir: Path, k: int, seed: int) -> List[str]:
 # -----------------------------
 # Plotting
 # -----------------------------
+def _is_finite_number(x: Any) -> bool:
+    try:
+        v = float(x)
+        return math.isfinite(v)
+    except Exception:
+        return False
+
+
 def plot_lines(
     rows: List[Dict[str, Any]],
     out_path: Path,
@@ -706,24 +1052,45 @@ def plot_lines(
     label_key: str = "alpha",
     title: str = "",
 ) -> None:
+    """
+    Plot lines grouped by strategy.
+
+    Improvements:
+      - Robustly drops NaN/inf points (prevents missing/blank lines).
+      - Uses varying markers/linestyles so overlapping curves are still distinguishable
+        (helps cases where e.g. all_float overlaps another strategy).
+      - If x_key == label_key, skips point text annotation to reduce clutter.
+    """
     import matplotlib.pyplot as plt  # type: ignore
+    from itertools import cycle
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # group by strategy
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
-        groups.setdefault(str(r[group_key]), []).append(r)
+        groups.setdefault(str(r.get(group_key, "")), []).append(r)
 
-    plt.figure(figsize=(8, 6))
+    markers = cycle(["o", "s", "^", "D", "v", "P", "*", "X", "+", "x"])
+    linestyles = cycle(["-", "--", "-.", ":"])
+
+    plt.figure(figsize=(9, 6))
     for g, items in groups.items():
-        items = sorted(items, key=lambda rr: float(rr["alpha"]))
+        # keep only finite points
+        items = [it for it in items if _is_finite_number(it.get(x_key)) and _is_finite_number(it.get(y_key))]
+        if not items:
+            continue
+        items = sorted(items, key=lambda rr: float(rr[x_key]))
         xs = [float(it[x_key]) for it in items]
         ys = [float(it[y_key]) for it in items]
-        plt.plot(xs, ys, marker="o", label=g)
-        # annotate alpha on each point (no method names on points)
-        for it, x, y in zip(items, xs, ys):
-            plt.text(x, y, f'{it[label_key]:g}', fontsize=8)
+
+        mk = next(markers)
+        ls = next(linestyles)
+        plt.plot(xs, ys, marker=mk, linestyle=ls, linewidth=2.0, markersize=5.5, label=g)
+
+        if label_key != x_key:
+            for it, x, y in zip(items, xs, ys):
+                if _is_finite_number(it.get(label_key)):
+                    plt.text(x, y, f'{float(it[label_key]):g}', fontsize=8)
 
     plt.xlabel(x_key)
     plt.ylabel(y_key)
@@ -734,10 +1101,20 @@ def plot_lines(
     plt.savefig(out_path, dpi=200)
     plt.close()
 
+def _load_font(size: int = 16):
+    try:
+        from PIL import ImageFont  # type: ignore
+        # try common fonts on Windows
+        for name in ["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"]:
+            try:
+                return ImageFont.truetype(name, size=size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+    except Exception:
+        return None
 
-# -----------------------------
-# Montage
-# -----------------------------
+
 def make_montage(
     out_dir: Path,
     methods: List[MethodEntry],
@@ -747,24 +1124,31 @@ def make_montage(
     cols_per_page: int = 6,
 ) -> None:
     """
-    Create montage pages:
-      each row = one strategy
-      columns = RGB_ref | alphas... | T_ref
-    Split alphas across pages if too many.
+    Create montage pages with annotations.
+
+    Layout per page:
+      columns = [RGB_ref] + [alpha chunk...] + [T_ref]
+      rows    = strategies
+
+    Annotations added:
+      - Column headers: RGB_ref / alpha values / T_ref
+      - Row headers: strategy names
+      - Title: sample filename + page index
     """
-    # group by strategy
+    from PIL import ImageDraw  # type: ignore
+
     strat_map: Dict[str, List[MethodEntry]] = {}
     for m in methods:
         if m.renders_dir is None:
             continue
         strat_map.setdefault(m.strategy, []).append(m)
 
-    # choose alpha order from union
+    if not strat_map:
+        return
+
     alphas_all = sorted({round(m.alpha, 6) for m in methods})
-    # split alphas into chunks
     chunks = [alphas_all[i:i + cols_per_page] for i in range(0, len(alphas_all), cols_per_page)]
 
-    # load reference images
     rgb_ref_path = rgb_renders / sample_name
     t_ref_path = t_renders / sample_name
     if not rgb_ref_path.exists() or not t_ref_path.exists():
@@ -772,32 +1156,63 @@ def make_montage(
     rgb_ref = Image.fromarray((read_image_f32(rgb_ref_path) * 255).astype(np.uint8))
     t_ref = Image.fromarray((read_image_f32(t_ref_path) * 255).astype(np.uint8))
 
-    # determine cell size
     W, H = rgb_ref.size
     cell_w, cell_h = W, H
     pad = 6
-    header_h = 26
+    header_h = 36
+    left_w = 180  # for strategy text
+    title_h = 28
 
-    # strategy order
+    font_hdr = _load_font(16)
+    font_row = _load_font(14)
+    font_title = _load_font(18)
+
     strategies = sorted(strat_map.keys())
 
     for pi, alpha_chunk in enumerate(chunks, start=1):
-        # columns: RGB + chunk + T
-        ncols = 2 + len(alpha_chunk)
+        ncols = 2 + len(alpha_chunk)  # RGB + chunk + T
         nrows = len(strategies)
-        canvas_w = pad + ncols * (cell_w + pad)
-        canvas_h = pad + header_h + nrows * (cell_h + pad)
+        canvas_w = pad + left_w + ncols * (cell_w + pad)
+        canvas_h = pad + title_h + header_h + nrows * (cell_h + pad)
 
         canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+        draw = ImageDraw.Draw(canvas)
 
-        # paste row by row
+        # Title
+        title = f"Montage: {sample_name} (page {pi}/{len(chunks)})"
+        if font_title is not None:
+            draw.text((pad, pad), title, fill=(0, 0, 0), font=font_title)
+        else:
+            draw.text((pad, pad), title, fill=(0, 0, 0))
+
+        # Column headers
+        y_hdr = pad + title_h
+        x0 = pad + left_w
+        headers = ["RGB_ref"] + [f"a={a:g}" for a in alpha_chunk] + ["T_ref"]
+        for ci, htxt in enumerate(headers):
+            x = x0 + ci * (cell_w + pad)
+            # center text in header cell
+            tx = x + 6
+            ty = y_hdr + 8
+            if font_hdr is not None:
+                draw.text((tx, ty), htxt, fill=(0, 0, 0), font=font_hdr)
+            else:
+                draw.text((tx, ty), htxt, fill=(0, 0, 0))
+
+        # Paste images row by row
         for ri, strat in enumerate(strategies):
-            y0 = pad + header_h + ri * (cell_h + pad)
-            # left: rgb ref
-            x = pad
+            y0 = pad + title_h + header_h + ri * (cell_h + pad)
+
+            # row label
+            if font_row is not None:
+                draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0), font=font_row)
+            else:
+                draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0))
+
+            x = x0
             canvas.paste(rgb_ref, (x, y0))
             x += cell_w + pad
-            # alphas
+
             entries = {round(m.alpha, 6): m for m in strat_map[strat]}
             for a in alpha_chunk:
                 m = entries.get(round(a, 6))
@@ -807,17 +1222,13 @@ def make_montage(
                         im = Image.fromarray((read_image_f32(p) * 255).astype(np.uint8))
                         canvas.paste(im, (x, y0))
                 x += cell_w + pad
-            # right: t ref
+
             canvas.paste(t_ref, (x, y0))
 
         out_path = out_dir / f"montage_page{pi}.png"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(out_path)
 
-
-# -----------------------------
-# Main
-# -----------------------------
 def main() -> None:
     ap = argparse.ArgumentParser("Evaluate sweep blends with render-ref + gt-ref metrics.")
 
@@ -941,29 +1352,43 @@ def main() -> None:
     if not methods:
         raise RuntimeError(f"No methods with renders found under: {sweep_root}")
 
-    # sample frames by names from RGB gt (stable ordering)
-    sample_names = sample_frame_names(rgb_gt, args.sample_frames, args.seed)
-    if not sample_names:
-        # fallback to RGB renders
-        sample_names = sample_frame_names(rgb_renders, args.sample_frames, args.seed)
+    # sample frames:
+    # - for GT metrics: sample from RGB GT
+    sample_names_gt = sample_frame_names(rgb_gt, args.sample_frames, args.seed)
+    if not sample_names_gt:
+        sample_names_gt = sample_frame_names(rgb_renders, args.sample_frames, args.seed)
+
+    # - for render-ref metrics & montage: prefer intersection of RGB renders and T renders
+    ref_all = common_names([rgb_renders, t_renders])
+    if ref_all:
+        rng = np.random.RandomState(args.seed)
+        if args.sample_frames <= 0 or args.sample_frames >= len(ref_all):
+            sample_names_ref = ref_all
+        else:
+            idx = rng.choice(len(ref_all), size=args.sample_frames, replace=False)
+            idx.sort()
+            sample_names_ref = [ref_all[i] for i in idx]
+    else:
+        sample_names_ref = sample_frame_names(rgb_renders, args.sample_frames, args.seed)
 
     # evaluate
+
     rows_render_ref = []
     rows_gt_ref = []
 
     for m in tqdm(methods, desc="Evaluating", unit="method"):
-        rr = eval_render_ref(
+        rr = eval_ref_bundle(
             method_renders=m.renders_dir,  # type: ignore
             rgb_renders=rgb_renders,
             t_renders=t_renders,
             thermal_mode=args.thermal_scalar,
             thermal_align=args.thermal_align,
-            sample_names=sample_names,
+            sample_names=sample_names_ref,
         )
         gr = eval_vs_gt(
             method_renders=m.renders_dir,  # type: ignore
             gt_dir=rgb_gt,
-            sample_names=sample_names,
+            sample_names=sample_names_gt,
         )
 
         rows_render_ref.append({
@@ -979,31 +1404,148 @@ def main() -> None:
             **{f"{k}_mean": v for k, v in gr.items()},
         })
 
-    # write csv
-    import pandas as pd  # type: ignore
-    df_rr = pd.DataFrame(rows_render_ref).sort_values(["strategy", "alpha"])
-    df_gt = pd.DataFrame(rows_gt_ref).sort_values(["strategy", "alpha"])
-    df_rr.to_csv(out_dir / "summary_render_ref.csv", index=False)
-    df_gt.to_csv(out_dir / "summary_gt_ref.csv", index=False)
+
+    # write csv (pandas optional)
+    rr_sorted = sorted(rows_render_ref, key=lambda r: (str(r.get("strategy", "")), float(r.get("alpha", 0.0))))
+    gt_sorted = sorted(rows_gt_ref, key=lambda r: (str(r.get("strategy", "")), float(r.get("alpha", 0.0))))
+
+    def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
+        if not rows:
+            return
+        # stable field order: strategy, alpha, label, then the rest
+        base = ["strategy", "alpha", "label"]
+        extra_keys = sorted({k for row in rows for k in row.keys() if k not in base})
+        fields = base + extra_keys
+        try:
+            import pandas as pd  # type: ignore
+            pd.DataFrame(rows)[fields].to_csv(path, index=False)
+        except ModuleNotFoundError:
+            import csv
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=fields)
+                w.writeheader()
+                for row in rows:
+                    w.writerow({k: row.get(k, "") for k in fields})
+
+    _write_csv(out_dir / "summary_render_ref.csv", rr_sorted)
+    _write_csv(out_dir / "summary_gt_ref.csv", gt_sorted)
     print("[OK] wrote:", out_dir / "summary_render_ref.csv")
     print("[OK] wrote:", out_dir / "summary_gt_ref.csv")
 
-    # pareto (structure vs thermal)
-    if "SSIM_Y_mean" in df_rr.columns and "Spearman_S_mean" in df_rr.columns:
-        plot_lines(
-            rows=rows_render_ref,
-            out_path=out_dir / "pareto_lines.png",
-            x_key="SSIM_Y_mean",
-            y_key="Spearman_S_mean",
-            title="Structure (SSIM_Y) vs Thermal (Spearman_S)",
-        )
-        print("[OK] wrote:", out_dir / "pareto_lines.png")
+    rr_cols = {k for row in rr_sorted for k in row.keys()}
+    gt_cols = {k for row in gt_sorted for k in row.keys()}
 
-    # GT curves
-    for metric in ["PSNR_mean", "SSIM_mean", "LPIPS_mean", "PSNR_Y_mean", "SSIM_Y_mean"]:
-        if metric in df_gt.columns:
+
+    # Build a merged table for common Pareto plots: RGB-GT fidelity vs Thermal-teacher consistency
+    _tref_map: Dict[Tuple[str, float], Dict[str, Any]] = {}
+    for r in rr_sorted:
+        try:
+            _tref_map[(str(r.get("strategy", "")), float(r.get("alpha", 0.0)))] = r
+        except Exception:
+            continue
+
+    merged_gt_tref: List[Dict[str, Any]] = []
+    for g in gt_sorted:
+        key = (str(g.get("strategy", "")), float(g.get("alpha", 0.0)))
+        tr = _tref_map.get(key)
+        if tr is None:
+            continue
+        mg = dict(g)
+        # bring in key thermal teacher metrics if exist
+        for k in ["t_ref_Spearman_S_mean", "t_ref_MI_S_mean", "t_ref_NMI_S_mean", "t_ref_SSIM_S_mean",
+                  "fusion_MI_total_mean", "fusion_QABF_mean"]:
+            if k in tr:
+                mg[k] = tr[k]
+        merged_gt_tref.append(mg)
+
+
+
+    # Diagnostic: report identical curves (common when two blend methods touch the same parameter set)
+    def _report_identical(rows: List[Dict[str, Any]], metric: str) -> None:
+        by_strat: Dict[str, List[Tuple[float, float]]] = {}
+        for r in rows:
+            s = str(r.get("strategy", ""))
+            if metric not in r:
+                continue
+            try:
+                a = float(r.get("alpha", 0.0))
+                y = float(r.get(metric))
+                if not math.isfinite(y):
+                    continue
+                by_strat.setdefault(s, []).append((a, y))
+            except Exception:
+                continue
+        series: Dict[str, Tuple[List[float], List[float]]] = {}
+        for s, pts in by_strat.items():
+            pts = sorted(pts, key=lambda x: x[0])
+            series[s] = ([p[0] for p in pts], [p[1] for p in pts])
+
+        keys = list(series.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                s1, s2 = keys[i], keys[j]
+                x1, y1 = series[s1]
+                x2, y2 = series[s2]
+                if x1 != x2 or len(y1) != len(y2):
+                    continue
+                if np.allclose(np.asarray(y1), np.asarray(y2), atol=1e-12, rtol=1e-12):
+                    print(f"[INFO] Identical curve for metric '{metric}': {s1} == {s2} (curves overlap)")
+
+    for _m in ["rgb_ref_SSIM_Y_mean", "t_ref_Spearman_S_mean", "fusion_MI_total_mean", "fusion_QABF_mean", "PSNR_Y_mean"]:
+        if _m in rr_cols:
+            _report_identical(rr_sorted, _m)
+        if _m in gt_cols:
+            _report_identical(gt_sorted, _m)
+
+    # pareto (teacher/source-ref) : RGB structure vs Thermal consistency
+    if "rgb_ref_SSIM_Y_mean" in rr_cols and "t_ref_Spearman_S_mean" in rr_cols:
+        plot_lines(
+            rows=rr_sorted,
+            out_path=out_dir / "pareto_ref_structure_vs_thermal.png",
+            x_key="rgb_ref_SSIM_Y_mean",
+            y_key="t_ref_Spearman_S_mean",
+            title="Teacher-ref Pareto: RGB-structure (SSIM_Y vs RGB-render) vs Thermal (Spearman_S vs T-render)",
+        )
+        print("[OK] wrote:", out_dir / "pareto_ref_structure_vs_thermal.png")
+
+    # Pareto: RGB-GT fidelity vs Thermal-teacher consistency (useful for choosing alpha)
+    if merged_gt_tref and "PSNR_Y_mean" in gt_cols and "t_ref_Spearman_S_mean" in rr_cols:
+        plot_lines(
+            rows=merged_gt_tref,
+            out_path=out_dir / "pareto_gtfidelity_vs_thermal.png",
+            x_key="PSNR_Y_mean",
+            y_key="t_ref_Spearman_S_mean",
+            title="Pareto: RGB-GT fidelity (PSNR_Y) vs Thermal consistency (Spearman_S vs T-render)",
+        )
+        print("[OK] wrote:", out_dir / "pareto_gtfidelity_vs_thermal.png")
+
+
+    # REF curves vs alpha (teacher/source referenced)
+    ref_metrics = [
+        # RGB teacher
+        "rgb_ref_PSNR_mean", "rgb_ref_SSIM_mean", "rgb_ref_LPIPS_mean",
+        "rgb_ref_PSNR_Y_mean", "rgb_ref_SSIM_Y_mean", "rgb_ref_EdgeCorr_Y_mean",
+        # Thermal teacher
+        "t_ref_Spearman_S_mean", "t_ref_MI_S_mean", "t_ref_NMI_S_mean", "t_ref_SSIM_S_mean",
+        # Fusion metrics (no fused GT)
+        "fusion_MI_total_mean", "fusion_VIF_total_mean", "fusion_QABF_mean", "fusion_SF_mean", "fusion_SSIM_total_mean",
+    ]
+    for metric in ref_metrics:
+        if metric in rr_cols:
             plot_lines(
-                rows=rows_gt_ref,
+                rows=rr_sorted,
+                out_path=out_dir / f"curve_ref_{metric}.png",
+                x_key="alpha",
+                y_key=metric,
+                title=f"Teacher/source-ref metric vs alpha: {metric}",
+            )
+            print("[OK] wrote:", out_dir / f"curve_ref_{metric}.png")
+
+# GT curves (method vs RGB-GT) vs alpha
+    for metric in ["PSNR_mean", "SSIM_mean", "LPIPS_mean", "PSNR_Y_mean", "SSIM_Y_mean"]:
+        if metric in gt_cols:
+            plot_lines(
+                rows=gt_sorted,
                 out_path=out_dir / f"curve_{metric}.png",
                 x_key="alpha",
                 y_key=metric,
@@ -1011,14 +1553,15 @@ def main() -> None:
             )
             print("[OK] wrote:", out_dir / f"curve_{metric}.png")
 
+
     # montage
-    if not args.no_montage and sample_names:
+    if not args.no_montage and sample_names_ref:
         make_montage(
             out_dir=out_dir,
             methods=methods,
             rgb_renders=rgb_renders,
             t_renders=t_renders,
-            sample_name=sample_names[0],
+            sample_name=sample_names_ref[0],
             cols_per_page=max(1, int(args.montage_cols)),
         )
         print("[OK] wrote montage_page*.png")

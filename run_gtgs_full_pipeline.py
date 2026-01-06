@@ -462,7 +462,7 @@ def main() -> None:
         eprint(f"[INFO] Cleaning fit dir: {fit_dir}")
         shutil.rmtree(fit_dir)
 
-    cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir), "--align", "both", "--stage", "both"]
+    cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir), "--align", "both", "--stage", "both" ,"--comparison"]
     if args.comparison:
         cfr_cmd.append("--comparison")
 

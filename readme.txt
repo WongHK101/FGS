@@ -15,18 +15,18 @@
 14_eval_sweep：<out_root>/eval/summary.csv 存在且非空
 # 一步到位命令：
 python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\GeoTGS\input\PV-r4" `
-  --out_root  "F:\databackup\GeoTGS\output\PV-r4" `
+  --data_root "F:\databackup\GeoTGS-TC\input\PVpanel" `
+  --out_root  "F:\databackup\GeoTGS-TC\output\PVpanel" `
   --rgb_res 4 `
   --t_res 4
 如只需要第8-14步
 python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\GeoTGS\input\PV-r4" `
-  --out_root  "F:\databackup\GeoTGS\output\PV-r4" `
+  --data_root "F:\databackup\GeoTGS\input\NighttimeBuilding" `
+  --out_root  "F:\databackup\GeoTGS\output\NighttimeBuilding" `
   --rgb_res 4 `
   --t_res 4 `
-  --from_step 8 `
-  --to_step 14
+  --from_step 1 `
+  --to_step 4
 
 # 逐步流程：
 # 第一步，处理RGB和T的FOV、分辨率不一致的问题：
@@ -72,18 +72,22 @@ Get-ChildItem -Path $dst -File -Recurse -Include *.jpg,*.jpeg,*.png,*.tif,*.tiff
 Copy-Item -Path (Join-Path $src "*") -Destination $dst -Force
 Write-Host ("[OK] Selected tag: {0} | src: {1} -> dst: {2}" -f $best.tag, $src, $dst)
 # 第四步，COLMAP：
+新参数测试
 python convert-gtgs.py `
--s "F:\databackup\GeoTGS\input\PV-r4" `
---mapper_multiple_models 1 `
---min_model_size 5 `
---init_min_num_inliers 50 `
---abs_pose_min_num_inliers 20 `
---camera SIMPLE_RADIAL `
---matching spatial `
---matcher_args "--SpatialMatching.max_num_neighbors=80 --SpatialMatching.max_distance=500" `
---use_model_aligner `
---model_aligner_args "--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0" `
---prior_position_std_m 1.0
+  -s "F:\databackup\GeoTGS\input\NighttimeBuilding" `
+  --mapper_multiple_models 1 `
+  --min_model_size 5 `
+  --init_min_num_inliers 30 `
+  --abs_pose_min_num_inliers 6 `
+  --camera SIMPLE_RADIAL `
+  --image_reader_single_camera 1 `
+  --feature_args "--SiftExtraction.max_num_features=16384 --SiftExtraction.peak_threshold=0.0035 --SiftExtraction.domain_size_pooling=1" `
+  --matching spatial `
+  --matcher_args "--SpatialMatching.max_num_neighbors=200 --SpatialMatching.max_distance=800 --SiftMatching.guided_matching=1 --SiftMatching.cross_check=1 --SiftMatching.max_ratio=0.85 --SiftMatching.max_distance=0.75 --TwoViewGeometry.min_num_inliers=15 --TwoViewGeometry.max_error=4" `
+  --mapper_args "--Mapper.max_reg_trials=10 --Mapper.min_num_matches=20 --Mapper.filter_max_reproj_error=3 --Mapper.filter_min_tri_angle=2" `
+  --use_model_aligner `
+  --model_aligner_args "--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0" `
+  --prior_position_std_m 1.0
 # 第五步，一阶段训练：
 python train.py `
   -s "F:\databackup\GeoTGS\input\PV-r4" `
@@ -132,7 +136,7 @@ python train.py `
 python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD"
 python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T"
 # 第九步，模型融合：
-python blend_model_strict_endpoints_v4.py `
+python blend_model_strict_endpoints.py `
   --rgb_model_dir "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" --rgb_iter 30000 `
   --t_model_dir   "F:\databackup\GeoTGS\output\PV-r4\Model_T" --t_iter 40000 `
   --alphas "0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1" `
