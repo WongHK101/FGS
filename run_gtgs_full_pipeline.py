@@ -402,7 +402,7 @@ def main() -> None:
     ap.add_argument("--alphas", default="0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1")
     ap.add_argument("--methods", nargs="+", default=[
         "sh_only", "sh_opacity", "sh_opacity_scale", "sh_opacity_geom",
-        "all_float", "dc_ycc_only", "sh_opacity_dc_ycc"
+        "dc_ycc_only", "sh_opacity_dc_ycc"
     ])
     ap.add_argument("--verify_endpoints", action="store_true", default=True)
 

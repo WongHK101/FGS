@@ -1115,25 +1115,33 @@ def _load_font(size: int = 16):
         return None
 
 
+
+
+def _open_pil_rgb(path: Path):
+    # Keep original resolution; PNG output is lossless.
+    return Image.open(path).convert("RGB")
+
+
 def make_montage(
-    out_dir: Path,
+    out_path: Path,
     methods: List[MethodEntry],
     rgb_renders: Path,
     t_renders: Path,
+    rgb_gt: Path,
+    t_gt: Path,
     sample_name: str,
-    cols_per_page: int = 6,
 ) -> None:
-    """
-    Create montage pages with annotations.
+    """Create a single (non-paged) montage for one sample view.
 
-    Layout per page:
-      columns = [RGB_ref] + [alpha chunk...] + [T_ref]
-      rows    = strategies
+    Columns:
+      [RGB_GT] [RGB_ref] [alpha... for each strategy] [T_ref] [T_GT]
 
-    Annotations added:
-      - Column headers: RGB_ref / alpha values / T_ref
-      - Row headers: strategy names
-      - Title: sample filename + page index
+    Rows:
+      One row per strategy.
+
+    Notes:
+      - No resizing/downsampling.
+      - If some method image is missing, the cell is left blank and marked 'missing'.
     """
     from PIL import ImageDraw  # type: ignore
 
@@ -1146,89 +1154,120 @@ def make_montage(
     if not strat_map:
         return
 
-    alphas_all = sorted({round(m.alpha, 6) for m in methods})
-    chunks = [alphas_all[i:i + cols_per_page] for i in range(0, len(alphas_all), cols_per_page)]
-
+    # Resolve reference/GT images for this sample
     rgb_ref_path = rgb_renders / sample_name
     t_ref_path = t_renders / sample_name
-    if not rgb_ref_path.exists() or not t_ref_path.exists():
+    rgb_gt_path = rgb_gt / sample_name
+    t_gt_path = t_gt / sample_name
+
+    if not (rgb_ref_path.exists() and t_ref_path.exists() and rgb_gt_path.exists() and t_gt_path.exists()):
+        # If any side missing, skip silently (caller can choose better samples)
         return
-    rgb_ref = Image.fromarray((read_image_f32(rgb_ref_path) * 255).astype(np.uint8))
-    t_ref = Image.fromarray((read_image_f32(t_ref_path) * 255).astype(np.uint8))
+
+    rgb_ref = _open_pil_rgb(rgb_ref_path)
+    t_ref = _open_pil_rgb(t_ref_path)
+    rgb_gt_im = _open_pil_rgb(rgb_gt_path)
+    t_gt_im = _open_pil_rgb(t_gt_path)
 
     W, H = rgb_ref.size
     cell_w, cell_h = W, H
+
+    strategies = sorted(strat_map.keys())
+    alphas_all = sorted({round(m.alpha, 6) for m in methods})
+
     pad = 6
-    header_h = 36
-    left_w = 180  # for strategy text
-    title_h = 28
+    header_h = 40
+    left_w = 190
+    title_h = 30
+
+    headers = ["RGB_GT", "RGB_ref"] + [f"a={a:g}" for a in alphas_all] + ["T_ref", "T_GT"]
+    ncols = len(headers)
+    nrows = len(strategies)
+
+    canvas_w = pad + left_w + ncols * (cell_w + pad)
+    canvas_h = pad + title_h + header_h + nrows * (cell_h + pad)
+
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+    draw = ImageDraw.Draw(canvas)
 
     font_hdr = _load_font(16)
     font_row = _load_font(14)
     font_title = _load_font(18)
+    font_missing = _load_font(14)
 
-    strategies = sorted(strat_map.keys())
+    # Title
+    title = f"Montage: {sample_name}"
+    if font_title is not None:
+        draw.text((pad, pad), title, fill=(0, 0, 0), font=font_title)
+    else:
+        draw.text((pad, pad), title, fill=(0, 0, 0))
 
-    for pi, alpha_chunk in enumerate(chunks, start=1):
-        ncols = 2 + len(alpha_chunk)  # RGB + chunk + T
-        nrows = len(strategies)
-        canvas_w = pad + left_w + ncols * (cell_w + pad)
-        canvas_h = pad + title_h + header_h + nrows * (cell_h + pad)
-
-        canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
-        draw = ImageDraw.Draw(canvas)
-
-        # Title
-        title = f"Montage: {sample_name} (page {pi}/{len(chunks)})"
-        if font_title is not None:
-            draw.text((pad, pad), title, fill=(0, 0, 0), font=font_title)
+    # Column headers
+    y_hdr = pad + title_h
+    x0 = pad + left_w
+    for ci, htxt in enumerate(headers):
+        x = x0 + ci * (cell_w + pad)
+        tx = x + 6
+        ty = y_hdr + 10
+        if font_hdr is not None:
+            draw.text((tx, ty), htxt, fill=(0, 0, 0), font=font_hdr)
         else:
-            draw.text((pad, pad), title, fill=(0, 0, 0))
+            draw.text((tx, ty), htxt, fill=(0, 0, 0))
 
-        # Column headers
-        y_hdr = pad + title_h
-        x0 = pad + left_w
-        headers = ["RGB_ref"] + [f"a={a:g}" for a in alpha_chunk] + ["T_ref"]
-        for ci, htxt in enumerate(headers):
-            x = x0 + ci * (cell_w + pad)
-            # center text in header cell
-            tx = x + 6
-            ty = y_hdr + 8
-            if font_hdr is not None:
-                draw.text((tx, ty), htxt, fill=(0, 0, 0), font=font_hdr)
+    # Simple cache to avoid reopening images repeatedly
+    img_cache: Dict[str, Any] = {}
+
+    def _get(path: Path):
+        key = str(path)
+        im = img_cache.get(key)
+        if im is None:
+            im = _open_pil_rgb(path)
+            img_cache[key] = im
+        return im
+
+    # Paste rows
+    for ri, strat in enumerate(strategies):
+        y0 = pad + title_h + header_h + ri * (cell_h + pad)
+
+        # row label
+        if font_row is not None:
+            draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0), font=font_row)
+        else:
+            draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0))
+
+        x = x0
+
+        # Left: RGB GT, RGB ref (same for all strategies)
+        canvas.paste(rgb_gt_im, (x, y0)); x += cell_w + pad
+        canvas.paste(rgb_ref, (x, y0)); x += cell_w + pad
+
+        # Method renders per alpha
+        entries = {round(m.alpha, 6): m for m in strat_map[strat]}
+        for a in alphas_all:
+            m = entries.get(round(a, 6))
+            if m is not None and m.renders_dir is not None:
+                p = m.renders_dir / sample_name
+                if p.exists():
+                    canvas.paste(_get(p), (x, y0))
+                else:
+                    # mark missing
+                    if font_missing is not None:
+                        draw.text((x + 10, y0 + 10), "missing", fill=(200, 0, 0), font=font_missing)
+                    else:
+                        draw.text((x + 10, y0 + 10), "missing", fill=(200, 0, 0))
             else:
-                draw.text((tx, ty), htxt, fill=(0, 0, 0))
-
-        # Paste images row by row
-        for ri, strat in enumerate(strategies):
-            y0 = pad + title_h + header_h + ri * (cell_h + pad)
-
-            # row label
-            if font_row is not None:
-                draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0), font=font_row)
-            else:
-                draw.text((pad + 4, y0 + 4), strat, fill=(0, 0, 0))
-
-            x = x0
-            canvas.paste(rgb_ref, (x, y0))
+                if font_missing is not None:
+                    draw.text((x + 10, y0 + 10), "n/a", fill=(200, 0, 0), font=font_missing)
+                else:
+                    draw.text((x + 10, y0 + 10), "n/a", fill=(200, 0, 0))
             x += cell_w + pad
 
-            entries = {round(m.alpha, 6): m for m in strat_map[strat]}
-            for a in alpha_chunk:
-                m = entries.get(round(a, 6))
-                if m is not None and m.renders_dir is not None:
-                    p = m.renders_dir / sample_name
-                    if p.exists():
-                        im = Image.fromarray((read_image_f32(p) * 255).astype(np.uint8))
-                        canvas.paste(im, (x, y0))
-                x += cell_w + pad
+        # Right: T ref, T GT
+        canvas.paste(t_ref, (x, y0)); x += cell_w + pad
+        canvas.paste(t_gt_im, (x, y0)); x += cell_w + pad
 
-            canvas.paste(t_ref, (x, y0))
-
-        out_path = out_dir / f"montage_page{pi}.png"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(out_path)
-
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path)
 def main() -> None:
     ap = argparse.ArgumentParser("Evaluate sweep blends with render-ref + gt-ref metrics.")
 
@@ -1260,7 +1299,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
 
     ap.add_argument("--no_montage", action="store_true", help="Disable montage output.")
-    ap.add_argument("--montage_cols", type=int, default=6, help="How many alpha columns per montage page.")
+    ap.add_argument("--montage_cols", type=int, default=9999, help="(Deprecated) kept for compatibility; montage is not paged anymore.")
+    ap.add_argument("--montage_samples", type=int, default=5, help="How many sample views to output as montage images (default: 5).")
 
     args = ap.parse_args()
 
@@ -1553,18 +1593,42 @@ def main() -> None:
             )
             print("[OK] wrote:", out_dir / f"curve_{metric}.png")
 
-
     # montage
-    if not args.no_montage and sample_names_ref:
-        make_montage(
-            out_dir=out_dir,
-            methods=methods,
-            rgb_renders=rgb_renders,
-            t_renders=t_renders,
-            sample_name=sample_names_ref[0],
-            cols_per_page=max(1, int(args.montage_cols)),
-        )
-        print("[OK] wrote montage_page*.png")
+    if not args.no_montage:
+        # choose montage sample names: prefer names present in all four dirs (RGB_ref/T_ref/RGB_GT/T_GT)
+        all_names = common_names([rgb_renders, t_renders, rgb_gt, t_gt])
+        if not all_names:
+            all_names = common_names([rgb_renders, t_renders])
+        if not all_names:
+            all_names = sample_frame_names(rgb_renders, max(1, int(args.montage_samples)), args.seed + 123)
+        else:
+            rng = np.random.RandomState(args.seed + 123)
+            k = int(args.montage_samples)
+            if k <= 0:
+                k = 1
+            if k >= len(all_names):
+                montage_names = all_names
+            else:
+                idx = rng.choice(len(all_names), size=k, replace=False)
+                idx.sort()
+                montage_names = [all_names[i] for i in idx]
+
+        if all_names and 'montage_names' not in locals():
+            montage_names = all_names[:max(1, int(args.montage_samples))]
+
+        for mi, name in enumerate(montage_names, start=1):
+            stem = Path(name).stem
+            out_path = out_dir / f"montage_{mi:02d}_{stem}.png"
+            make_montage(
+                out_path=out_path,
+                methods=methods,
+                rgb_renders=rgb_renders,
+                t_renders=t_renders,
+                rgb_gt=rgb_gt,
+                t_gt=t_gt,
+                sample_name=name,
+            )
+        print(f"[OK] wrote montage_*.png (count={len(montage_names)})")
 
     print("Done.")
 
