@@ -1,155 +1,185 @@
-完整流程如下：
-01_cfr：<data_root>/fit/image/image-fit 和 .../image-exif 都存在且有图
-02_eval_crop：<data_root>/fit/metrics/summary_all.json 存在且非空
-03_prepare_input：<data_root>/input 存在且有图
-04_convert_gtgs：<data_root>/distorted/sparse_aligned 下能找到 cameras.bin/.txt
-05_train_rgb：<out_root>/Model_RGB/chkpnt{rgb_iter}.pth 存在
-06_render_rgb：<out_root>/Model_RGB/test 下存在渲染图
-07_metrics_rgb：<out_root>/Model_RGB/results.json 或 results.txt 存在
-08_undistort_thermal：<data_root>/thermal_UD/images 有图，且 thermal_UD/sparse 存在
-09_normalize_sparse_ud：<data_root>/thermal_UD/sparse/0 存在且含 cameras.*
-10_train_thermal：<out_root>/Model_T/chkpnt{t_iter}.pth 存在
-11_render_thermal：<out_root>/Model_T/test 下存在渲染图
-12_metrics_thermal：<out_root>/Model_T/results.json 或 results.txt 存在
-13_blend：<out_root>/Model_F 存在且下面有子文件夹（不同 alpha/method 输出）
-14_eval_sweep：<out_root>/eval/summary.csv 存在且非空
-# 一步到位命令：
+GeoTGS / FGS 一键全流程（Resumable Pipeline + ADP 版）
+================================================
+
+本仓库（脚本集合）用于从 **RGB + Thermal** 原始图像出发，一条命令跑通：
+CFR 裁剪/对齐 → 裁剪评价 → COLMAP(GPS先验) → 3DGS Stage-1(RGB) → Thermal 去畸变 → Stage-2(Thermal) → 融合(blend sweep) → 批量评估。
+并可在 Stage-1 启用 **ADP-Texture（Artifact-aware Densification & Pruning）**，自动抑制天空/漂浮点等伪影，同时输出论文级曲线（CSV + PNG/PDF）。
+
+----------------------------------------------------------------------
+0. 前置依赖
+----------------------------------------------------------------------
+1) Python 环境：与你能跑通 gaussian-splatting (3DGS) 的环境一致
+   - torch / torchvision
+   - diff-gaussian-rasterization 已编译
+2) COLMAP（命令行可用）：
+   - Windows：colmap.exe 或 colmap.bat/cmd
+   - Linux：colmap 在 PATH
+3) ExifTool（命令行可用）：用于 CFR 中同步/修正 EXIF/XMP（尤其是 GPS/焦距/尺寸）
+4) （可选）TensorBoard：用于实时曲线；没有也不影响训练
+
+----------------------------------------------------------------------
+1. 代码/文件放置（非常重要）
+----------------------------------------------------------------------
+把以下脚本放在 **graphdeco-inria/gaussian-splatting 仓库根目录**（与 train.py / render.py / metrics.py 同级）：
+
+- run_gtgs_full_pipeline.py            （本仓库的一键脚本，建议用“UPDATED版本”）
+- cfr.py
+- eval_crop_metrics.py
+- convert-gtgs.py
+- blend_model_strict_endpoints.py
+- eval_blend_sweep.py
+
+同时，为启用 ADP（Stage-1 RGB）与日志/CSV/绘图，请确保你已经替换/新增了以下文件：
+- scene/gaussian_model.py              （你已经拿到的 ADP 版）
+- train.py                             （你已经拿到的 ADP+日志+CSV 版）
+- utils/adp_logger.py                  （周期级 CSV：adp_cycle.csv）
+- utils/adp_iter_logger.py             （迭代级 CSV：adp_iter.csv）
+- tools/plot_adp_paper_fig.py          （论文友好图：PNG+PDF）
+（tools/plot_adp_logs.py 可选，不影响一键流程）
+
+> 说明：run_gtgs_full_pipeline.py 默认假设 cwd=gaussian-splatting repo 根目录。
+
+----------------------------------------------------------------------
+2. 数据目录结构（data_root）
+----------------------------------------------------------------------
+你的 data_root 需要至少包含两个目录，并且 **图片直接放在目录下（不要嵌套子文件夹）**：
+
+<data_root>/
+  RGB/                # RGB 原始图（jpg/png 等），直接放文件
+  thermal/            # Thermal 原始图（jpg/png 等），直接放文件
+
+脚本会在 data_root 下自动生成/使用：
+  fit/                # CFR 输出（image-fit / image-exif 等）
+  input/              # 准备给 COLMAP 的输入（images/ + priors 等）
+  distorted/          # COLMAP 重建输出（sparse_aligned 等）
+  thermal_UD/         # Thermal 去畸变后的数据集（images/ + sparse/0）
+
+----------------------------------------------------------------------
+3. 一条命令跑通整个管线（推荐）
+----------------------------------------------------------------------
+（1）Windows PowerShell 示例：
 python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\GeoTGS-TC\input\PVpanel" `
-  --out_root  "F:\databackup\GeoTGS-TC\output\PVpanel" `
-  --rgb_res 4 `
-  --t_res 4
-如只需要第8-14步
-python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\GeoTGS\input\NighttimeBuilding" `
-  --out_root  "F:\databackup\GeoTGS\output\NighttimeBuilding" `
-  --rgb_res 4 `
-  --t_res 4 `
-  --from_step 1 `
-  --to_step 4
+  --data_root "F:\databackup\GeoTGS\input\PV-r4" `
+  --out_root  "F:\databackup\GeoTGS\output\PV-r4" `
+  --colmap "colmap" `
+  --exiftool "exiftool" `
+  --rgb_adp_profile default `
+  --rgb_adp_log `
+  --rgb_adp_plot_paper `
+  --auto_render `
+  --verify_endpoints
 
-# 逐步流程：
-# 第一步，处理RGB和T的FOV、分辨率不一致的问题：
-python cfr.py `
-  --rgb_dir "F:\databackup\GeoTGS\input\PV-r4\RGB" `
-  --th_dir  "F:\databackup\GeoTGS\input\PV-r4\thermal" `
-  --out_dir "F:\databackup\GeoTGS\input\PV-r4\fit" `
-  --comparison
-# 第二步，对fit和exif的结果进行评价：
-python eval_crop_metrics.py `
-  --th_dir   "F:\databackup\GeoTGS\input\PV-r4\thermal" `
-  --rgb_dir  "F:\databackup\GeoTGS\input\PV-r4\fit\image\image-fit" `
-  --rgb_dir  "F:\databackup\GeoTGS\input\PV-r4\fit\image\image-exif" `
-  --tag fit `
-  --tag exif `
-  --out_dir "F:\databackup\GeoTGS\input\PV-r4\fit\metrics"
-# 第三步，整理训练目录：
-# 依据第二步结果，自动比较fit和exif两种方法哪种更好，将对应图片拷贝到F:\databackup\GeoTGS\input\PV-r4\input中
-$root = "F:\databackup\GeoTGS\input\PV-r4"
-$summary = Join-Path $root "fit\metrics\summary_all.json"
-if (!(Test-Path $summary)) { throw "summary_all.json not found: $summary (请先跑第2步)" }
-$obj = Get-Content $summary -Raw | ConvertFrom-Json
-$cands = @($obj.candidates)
-if (!$cands -or $cands.Count -lt 1) { throw "No candidates in summary_all.json" }
-$cands = $cands | Where-Object { $_.count -gt 0 -and (Test-Path $_.rgb_dir) }
-if (!$cands -or $cands.Count -lt 1) { throw "All candidates invalid (count==0 or rgb_dir missing)" }
-function Score($v) {
-  if ($null -eq $v) { return -1e30 }
-  return [double]$v
-}
-$best = $cands | Sort-Object `
-  @{Expression={ Score $_.mean.edge_f1   }; Descending=$true}, `
-  @{Expression={ Score $_.mean.grad_ncc  }; Descending=$true}, `
-  @{Expression={ Score $_.mean.nmi       }; Descending=$true}, `
-  @{Expression={ Score $_.mean.edge_dice }; Descending=$true}, `
-  @{Expression={ Score $_.mean.mi        }; Descending=$true} `
-  | Select-Object -First 1
-$src = $best.rgb_dir
-$dst = Join-Path $root "input"
-New-Item -ItemType Directory -Force -Path $dst | Out-Null
-Get-ChildItem -Path $dst -File -Recurse -Include *.jpg,*.jpeg,*.png,*.tif,*.tiff,*.JPG,*.JPEG,*.PNG,*.TIF,*.TIFF `
-  -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-Copy-Item -Path (Join-Path $src "*") -Destination $dst -Force
-Write-Host ("[OK] Selected tag: {0} | src: {1} -> dst: {2}" -f $best.tag, $src, $dst)
-# 第四步，COLMAP：
-新参数测试
-python convert-gtgs.py `
-  -s "F:\databackup\GeoTGS\input\NighttimeBuilding" `
-  --mapper_multiple_models 1 `
-  --min_model_size 5 `
-  --init_min_num_inliers 30 `
-  --abs_pose_min_num_inliers 6 `
-  --camera SIMPLE_RADIAL `
-  --image_reader_single_camera 1 `
-  --feature_args "--SiftExtraction.max_num_features=16384 --SiftExtraction.peak_threshold=0.0035 --SiftExtraction.domain_size_pooling=1" `
-  --matching spatial `
-  --matcher_args "--SpatialMatching.max_num_neighbors=200 --SpatialMatching.max_distance=800 --SiftMatching.guided_matching=1 --SiftMatching.cross_check=1 --SiftMatching.max_ratio=0.85 --SiftMatching.max_distance=0.75 --TwoViewGeometry.min_num_inliers=15 --TwoViewGeometry.max_error=4" `
-  --mapper_args "--Mapper.max_reg_trials=10 --Mapper.min_num_matches=20 --Mapper.filter_max_reproj_error=3 --Mapper.filter_min_tri_angle=2" `
-  --use_model_aligner `
-  --model_aligner_args "--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0" `
-  --prior_position_std_m 1.0
-# 第五步，一阶段训练：
-python train.py `
-  -s "F:\databackup\GeoTGS\input\PV-r4" `
-  --images images `
-  -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" `
-  -r 4 `
-  --iterations 30000 `
-  --checkpoint_iterations 30000 `
-  --data_device cuda `
-  --eval `
-  --densify_from_iter 1500 `
-  --densify_until_iter 10000 `
-  --densification_interval 300 `
-  --densify_grad_threshold 0.001 `
-  --lambda_dssim 0.3
-python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" -s "F:\databackup\GeoTGS\input\PV-r4"
-python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_RGB"
-# 第六步，用第四步得到的稀疏模型去undistort thermal image：
-colmap image_undistorter `
-  --image_path "F:\databackup\GeoTGS\input\PV-r4\thermal" `
-  --input_path "F:\databackup\GeoTGS\input\PV-r4\distorted\sparse_aligned" `
-  --output_path "F:\databackup\GeoTGS\input\PV-r4\thermal_UD" `
-  --output_type COLMAP
-# 第七步：将thermal_UD\sparse内的文件移至0文件夹内:
-$src="F:\databackup\GeoTGS\input\PV-r4\thermal_UD\sparse"
-$dst=Join-Path $src "0"
-New-Item -ItemType Directory -Force -Path $dst | Out-Null
-Get-ChildItem -Path $src -File | Move-Item -Destination $dst -Force
-# 第八步，二阶段训练：
-python train.py `
-  -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD" `
-  -images images `
-  -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" `
-  --start_checkpoint "F:\databackup\GeoTGS\output\PV-r4\Model_RGB\chkpnt30000.pth" `
-  -r 4 `
-  --iterations 40000 `
-  --checkpoint_iterations 40000 `
-  --position_lr_init 0 --position_lr_final 0 `
-  --scaling_lr 0 --rotation_lr 0 `
-  --opacity_lr 0 `
-  --feature_lr 0.001 `
-  --densify_from_iter 999999 --densify_until_iter 0 `
-  --densification_interval 999999 --opacity_reset_interval 999999 `
-  --lambda_dssim 0.05 `
-  --eval
-python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD"
-python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T"
-# 第九步，模型融合：
-python blend_model_strict_endpoints.py `
-  --rgb_model_dir "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" --rgb_iter 30000 `
-  --t_model_dir   "F:\databackup\GeoTGS\output\PV-r4\Model_T" --t_iter 40000 `
-  --alphas "0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1" `
-  --out_root "F:\databackup\GeoTGS\output\PV-r4\Model_F" `
-  --out_iter 40000 `
-  --methods sh_only sh_opacity sh_opacity_scale sh_opacity_geom all_float dc_ycc_only sh_opacity_dc_ycc `
-  --clean_out --verify_endpoints
-# 第十步，批量渲染+评价：
-python eval_blend_sweep.py `
-  --sweep_root "F:\databackup\GeoTGS\output\PV-r4\Model_F" `
-  --rgb_render "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" `
-  --t_render   "F:\databackup\GeoTGS\output\PV-r4\Model_T" `
-  --out_dir "F:\databackup\GeoTGS\output\PV-r4\eval" `
-  --auto_render
+（2）Linux/macOS bash 示例：
+python run_gtgs_full_pipeline.py \
+  --data_root "/data/GeoTGS/input/PV-r4" \
+  --out_root  "/data/GeoTGS/output/PV-r4" \
+  --colmap "colmap" \
+  --exiftool "exiftool" \
+  --rgb_adp_profile default \
+  --rgb_adp_log \
+  --rgb_adp_plot_paper \
+  --auto_render \
+  --verify_endpoints
 
+这条命令会按顺序执行 1-14 步（默认可断点续跑）。
 
+----------------------------------------------------------------------
+4. 断点续跑 / 清理 / 强制重跑
+----------------------------------------------------------------------
+- 默认 **Resumable**：若检测到某一步的“关键输出文件”已存在，会自动跳过。
+- 每一步会在 <data_root>/_pipeline_state/ 写入 marker json。
+
+常用参数：
+- --from_step N --to_step M     # 只跑指定步骤范围（1-14）
+- --force                       # 无视现有输出，强制重跑（关闭跳过逻辑）
+- --dry_run                     # 只打印命令，不执行
+- --clean_fit                   # 清理 <data_root>/fit
+- --clean_input                 # 清理 <data_root>/input
+- --clean_thermal_ud            # 清理 <data_root>/thermal_UD
+- --clean_blend_out             # 清理 <out_root>/Model_F（融合输出）
+- --skip_train                  # 跳过 Stage-1/2 训练 + render/metrics（用于调试前半段）
+- --skip_blend                  # 跳过融合 + sweep 评估（用于只做重建/训练）
+
+----------------------------------------------------------------------
+5. ADP（Stage-1 RGB）参数怎么选（在一键脚本里）
+----------------------------------------------------------------------
+你只需要设置：
+- --rgb_adp_profile  off | default | aggressive | conservative
+- --rgb_adp_log                  # 开启 CSV：Model_RGB/adp_cycle.csv + adp_iter.csv
+- --rgb_adp_plot_paper           # 训练后自动导出论文图到 Model_RGB/adp_plots_paper/
+
+建议：
+- default：先跑通、通用最稳
+- aggressive：天空/漂浮点很多时更强抑制
+- conservative：担心误杀平滑真实表面时
+
+额外频率参数（可选）：
+- --rgb_adp_log_interval 50
+- --rgb_adp_iter_csv_interval 50
+- --rgb_adp_tex_interval 4
+
+----------------------------------------------------------------------
+6. 关键输出检查（每一步“判定成功”的典型输出）
+----------------------------------------------------------------------
+01_cfr：
+  <data_root>/fit/image/image-fit/    有图
+  <data_root>/fit/image/image-exif/   有图
+
+02_eval_crop：
+  <data_root>/fit/metrics/summary_all.json  存在且非空
+
+03_prepare_input：
+  <data_root>/input/  存在且有图（images/ 等）
+
+04_convert_gtgs：
+  <data_root>/distorted/sparse_aligned/  能找到 cameras.bin/.txt（对齐后稀疏模型）
+
+05_train_rgb：
+  <out_root>/Model_RGB/chkpnt{rgb_iter}.pth 存在
+  （若启用 ADP+日志）<out_root>/Model_RGB/adp_cycle.csv、adp_iter.csv
+
+06_render_rgb：
+  <out_root>/Model_RGB/test/  下存在渲染图
+
+07_metrics_rgb：
+  <out_root>/Model_RGB/results.json 或 results.txt
+
+08_undistort_thermal：
+  <data_root>/thermal_UD/images/ 有图 + thermal_UD/sparse 存在
+
+09_normalize_sparse_ud：
+  <data_root>/thermal_UD/sparse/0  存在且含 cameras.*
+
+10_train_thermal：
+  <out_root>/Model_T/chkpnt{t_iter}.pth 存在（脚本默认 stage-2 不做 densify）
+
+11_render_thermal：
+  <out_root>/Model_T/test/ 下存在渲染图
+
+12_metrics_thermal：
+  <out_root>/Model_T/results.json 或 results.txt
+
+13_blend：
+  <out_root>/Model_F/  存在且下面有各 alpha/method 子目录输出
+
+14_eval_sweep：
+  <out_root>/eval/summary.csv 存在且非空
+
+----------------------------------------------------------------------
+7. 常见问题（快速排雷）
+----------------------------------------------------------------------
+- CFR 找不到图片：请确认 RGB/thermal 目录下图片是“直接放文件”，不是嵌套子目录。
+- COLMAP 找不到：用 --colmap 指定可执行文件路径（Windows 上可用 colmap.bat/cmd）
+- ExifTool 找不到：用 --exiftool 指定 exiftool 路径。
+- 想只跑到某一步：用 --to_step，比如只跑到 04_convert_gtgs：--to_step 4
+- 训练想改迭代次数：--rgb_iter / --t_iter
+- 需要 baseline（不启用 ADP）：--rgb_adp_profile off（或不传该参数）
+
+----------------------------------------------------------------------
+8. 版本说明
+----------------------------------------------------------------------
+若你使用的是“UPDATED 的 run_gtgs_full_pipeline.py”，它支持：
+- --rgb_adp_profile / --rgb_adp_log / --rgb_adp_plot_paper 等 Stage-1 ADP 选项
+- 自动把 ADP 参数透传给 train.py
+
+如果你当前目录里还是旧版 run_gtgs_full_pipeline.py，请用 UPDATED 版本替换即可。

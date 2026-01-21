@@ -4,19 +4,23 @@ run_gtgs_full_pipeline_resumable.py
 
 A resumable, one-command CLI runner for the end-to-end GeoTGS/FGS pipeline:
 
-1) CFR crop/align (cfr.py)
-2) Crop+EXIF evaluation (eval_crop_metrics.py) and (optionally) auto-pick best candidate
-3) Prepare COLMAP input/ directory from chosen candidate
-4) COLMAP pipeline with GPS priors + alignment (convert-gtgs.py)
-5) Stage-1 3DGS train (RGB), render, metrics
-6) Undistort thermal images using aligned sparse model (colmap image_undistorter)
-7) Normalize thermal_UD/sparse layout (move files into sparse/0 if needed)
-8) Stage-2 3DGS train (Thermal), render, metrics
-9) Blend RGB+Thermal models (blend_model_strict_endpoints.py)
-10) Evaluate sweep (eval_blend_sweep.py, with optional auto_render)
+01) CFR crop/align (cfr.py)
+02) Crop+EXIF evaluation (eval_crop_metrics.py) and (optionally) auto-pick best candidate
+03) Prepare COLMAP input/ directory from chosen candidate
+04) COLMAP pipeline with GPS priors + alignment (convert-gtgs.py)
+05) Stage-1 3DGS train (RGB), (+ optional ADP logs/plots)
+06) Render RGB
+07) Metrics RGB
+08) Undistort thermal images using aligned sparse model (colmap image_undistorter)
+09) Normalize thermal_UD/sparse layout (move files into sparse/0 if needed)
+10) Stage-2 3DGS train (Thermal), render, metrics
+11) Render Thermal
+12) Metrics Thermal
+13) Blend RGB+Thermal models (blend_model_strict_endpoints.py)
+14) Evaluate sweep (eval_blend_sweep.py, with optional auto_render)
 
-Key features vs the previous version:
-- **Resumable by default**: If a step's expected outputs already exist, it will be skipped on rerun.
+Key features:
+- Resumable by default: if a step's expected outputs already exist, it will be skipped on rerun.
 - Writes per-step markers under: <data_root>/_pipeline_state/*.json
 - More robust COLMAP executable handling on Windows:
   - resolves "colmap" via PATH
@@ -51,11 +55,10 @@ from typing import Dict, List, Optional, Tuple
 def eprint(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
+
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
-def exists_nonempty_dir(p: Path) -> bool:
-    return p.exists() and p.is_dir() and any(p.iterdir())
 
 def list_images(dir_path: Path) -> List[Path]:
     exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
@@ -68,6 +71,33 @@ def list_images(dir_path: Path) -> List[Path]:
     out.sort()
     return out
 
+
+def dir_has_any_images_recursive(root: Path) -> bool:
+    exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+    if not root.exists():
+        return False
+    try:
+        for p in root.rglob("*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def dir_has_any_suffix_recursive(root: Path, suffixes: Tuple[str, ...]) -> bool:
+    suffixes_l = {s.lower() for s in suffixes}
+    if not root.exists():
+        return False
+    try:
+        for p in root.rglob("*"):
+            if p.is_file() and p.suffix.lower() in suffixes_l:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def contains_any_file(root: Path, names: Tuple[str, ...], max_depth: int = 2) -> bool:
     """
     Returns True if any file with basename in `names` exists within `root` up to `max_depth`.
@@ -75,7 +105,6 @@ def contains_any_file(root: Path, names: Tuple[str, ...], max_depth: int = 2) ->
     if not root.exists():
         return False
     root = root.resolve()
-    # BFS with depth
     queue: List[Tuple[Path, int]] = [(root, 0)]
     while queue:
         cur, d = queue.pop(0)
@@ -88,6 +117,7 @@ def contains_any_file(root: Path, names: Tuple[str, ...], max_depth: int = 2) ->
         except Exception:
             continue
     return False
+
 
 def hardlink_or_copy(src: Path, dst: Path, mode: str) -> None:
     """
@@ -123,6 +153,7 @@ def hardlink_or_copy(src: Path, dst: Path, mode: str) -> None:
 
     raise ValueError(f"Unknown link mode: {mode}")
 
+
 def prepare_input_dir(src_images_dir: Path, dataset_root: Path, clean: bool, link_mode: str) -> Path:
     """
     Copy/link chosen aligned RGB images into <dataset_root>/input for COLMAP.
@@ -137,7 +168,6 @@ def prepare_input_dir(src_images_dir: Path, dataset_root: Path, clean: bool, lin
     if not src_imgs:
         raise FileNotFoundError(f"No images found under: {src_images_dir}")
 
-    # If input already has images and we're not cleaning, we still (re)sync only when needed.
     eprint(f"[INFO] Preparing COLMAP input/ from: {src_images_dir}  (count={len(src_imgs)}, mode={link_mode})")
     for fp in src_imgs:
         hardlink_or_copy(fp, input_dir / fp.name, mode=link_mode)
@@ -159,7 +189,6 @@ def _ps_resolve_command(name: str) -> Optional[str]:
     if not ps:
         return None
     try:
-        # Not using -NoProfile: allow user profiles where aliases/functions might exist.
         out = subprocess.check_output(
             [ps, "-Command", f"(Get-Command {name} -ErrorAction SilentlyContinue).Source"],
             stderr=subprocess.DEVNULL,
@@ -168,10 +197,10 @@ def _ps_resolve_command(name: str) -> Optional[str]:
         out = out.strip()
         if not out:
             return None
-        # first line is enough
         return out.splitlines()[0].strip() or None
     except Exception:
         return None
+
 
 def _normalize_cmd_for_windows(cmd: List[str]) -> List[str]:
     if os.name != "nt" or not cmd:
@@ -198,6 +227,7 @@ def _normalize_cmd_for_windows(cmd: List[str]) -> List[str]:
 
     return cmd
 
+
 def run_cmd(cmd: List[str], cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
     cmd2 = _normalize_cmd_for_windows(cmd)
     cwd_str = str(cwd) if cwd else None
@@ -213,6 +243,7 @@ def run_cmd(cmd: List[str], cwd: Optional[Path] = None, env: Optional[Dict[str, 
 def marker_path(state_dir: Path, step_name: str) -> Path:
     return state_dir / f"{step_name}.json"
 
+
 def write_marker(marker: Path, step_name: str, cmd: List[str], cwd: Optional[Path], note: str = "") -> None:
     ensure_dir(marker.parent)
     payload = {
@@ -224,6 +255,7 @@ def write_marker(marker: Path, step_name: str, cmd: List[str], cwd: Optional[Pat
     }
     marker.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
+
 def marker_matches(marker: Path, cmd: List[str]) -> bool:
     if not marker.exists():
         return False
@@ -232,6 +264,7 @@ def marker_matches(marker: Path, cmd: List[str]) -> bool:
         return obj.get("cmd", None) == cmd
     except Exception:
         return False
+
 
 def should_skip_step(state_dir: Path, step_name: str, cmd: List[str], outputs_ok: bool, force: bool) -> bool:
     """
@@ -289,6 +322,7 @@ def ensure_sparse_0(sparse_dir: Path) -> Path:
 
     return model0
 
+
 @dataclass
 class CropCandidate:
     tag: str
@@ -296,12 +330,13 @@ class CropCandidate:
     count: int
     mean: Dict[str, Optional[float]]
 
+
 def pick_best_candidate(summary_all_json: Path, prefer: Tuple[str, ...] = ("edge_f1", "grad_ncc", "nmi", "edge_dice", "mi")) -> CropCandidate:
     """
     Auto-pick best crop candidate from eval_crop_metrics summary_all.json.
 
     Heuristic:
-      sort by preferred metrics (descending) in order; skip missing values.
+      sort by preferred metrics (descending) in order; missing values treated as -inf.
     """
     obj = json.loads(summary_all_json.read_text(encoding="utf-8"))
     candidates = obj.get("candidates", [])
@@ -342,8 +377,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Run the full CFR->COLMAP->3DGS(RGB)->ThermalUD->3DGS(T)->Blend->Eval pipeline with one command (resumable)."
     )
-    ap.add_argument("--data_root", required=True, help="Dataset root, e.g. F:\\databackup\\GeoTGS\\input\\PV-r4")
-    ap.add_argument("--out_root", required=True, help="Output root, e.g. F:\\databackup\\GeoTGS\\output\\PV-r4")
+    ap.add_argument("--data_root", required=True, help=r"Dataset root, e.g. F:\databackup\GeoTGS\input\PV-r4")
+    ap.add_argument("--out_root", required=True, help=r"Output root, e.g. F:\databackup\GeoTGS\output\PV-r4")
 
     ap.add_argument("--rgb_dir", default="", help="RGB directory. Default: <data_root>/RGB")
     ap.add_argument("--th_dir", default="", help="Thermal directory. Default: <data_root>/thermal")
@@ -369,7 +404,7 @@ def main() -> None:
     ap.add_argument("--from_step", type=int, default=1, help="Execute steps starting from this number (1-14).")
     ap.add_argument("--to_step", type=int, default=14, help="Execute steps up to this number (1-14).")
 
-    # COLMAP defaults copied from your example
+    # COLMAP defaults (adapt as needed)
     ap.add_argument("--camera", default="SIMPLE_RADIAL")
     ap.add_argument("--matching", default="spatial", choices=["spatial", "exhaustive", "sequential", "vocab_tree"])
     ap.add_argument("--matcher_args", default="--SpatialMatching.max_num_neighbors=80 --SpatialMatching.max_distance=500")
@@ -377,24 +412,50 @@ def main() -> None:
     ap.add_argument("--min_model_size", type=int, default=5)
     ap.add_argument("--init_min_num_inliers", type=int, default=50)
     ap.add_argument("--abs_pose_min_num_inliers", type=int, default=20)
-    ap.add_argument("--use_model_aligner", action="store_true", default=True)
+    ap.add_argument("--use_model_aligner", dest="use_model_aligner", action="store_true", default=True)
+    ap.add_argument("--no_model_aligner", dest="use_model_aligner", action="store_false",
+                    help="Disable COLMAP model_aligner even if GPS priors exist.")
     ap.add_argument("--model_aligner_args", default="--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0")
     ap.add_argument("--prior_position_std_m", type=float, default=1.0)
     ap.add_argument("--wgs84_code", type=int, default=0)
 
     # Stage 1 training defaults (RGB)
     ap.add_argument("--rgb_iter", type=int, default=30000)
-    ap.add_argument("--rgb_res", type=int, default=1)
+    ap.add_argument("--rgb_res", type=int, default=1, help="Stage-1 RGB resolution divider (passed to train.py -r).")
     ap.add_argument("--rgb_densify_from", type=int, default=1500)
     ap.add_argument("--rgb_densify_until", type=int, default=10000)
     ap.add_argument("--rgb_densify_interval", type=int, default=300)
     ap.add_argument("--rgb_densify_grad", type=float, default=0.001)
     ap.add_argument("--rgb_lambda_dssim", type=float, default=0.3)
+
+    # --- ADP-Texture (Stage-1 RGB) options (requires modified train.py + scene/gaussian_model.py) ---
+    ap.add_argument(
+        "--rgb_adp_profile",
+        default="off",
+        choices=["off", "default", "aggressive", "conservative"],
+        help="Enable ADP-Texture for Stage-1 RGB training. Use 'off' for baseline.",
+    )
+    ap.add_argument(
+        "--rgb_adp_log",
+        action="store_true",
+        default=False,
+        help="If set, enable ADP CSV logging (adp_cycle.csv + adp_iter.csv) and keep TensorBoard scalars (adp/*).",
+    )
+    ap.add_argument("--rgb_adp_log_interval", type=int, default=50, help="TensorBoard ADP log interval (iters).")
+    ap.add_argument("--rgb_adp_iter_csv_interval", type=int, default=50, help="ADP iter CSV interval (iters).")
+    ap.add_argument("--rgb_adp_tex_interval", type=int, default=4, help="Update ADP texture EMA every N iters.")
+    ap.add_argument("--rgb_adp_no_cycle_print", action="store_true", default=False, help="Disable ADP cycle console prints.")
+    ap.add_argument(
+        "--rgb_adp_plot_paper",
+        action="store_true",
+        default=False,
+        help="After RGB training, run tools/plot_adp_paper_fig.py to export paper-ready PNG/PDF plots.",
+    )
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
 
     # Stage 2 training defaults (Thermal)
     ap.add_argument("--t_iter", type=int, default=40000)
-    ap.add_argument("--t_res", type=int, default=1)
+    ap.add_argument("--t_res", type=int, default=1, help="Stage-2 Thermal resolution divider (passed to train.py -r).")
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
     ap.add_argument("--t_lambda_dssim", type=float, default=0.05)
 
@@ -404,17 +465,30 @@ def main() -> None:
         "sh_only", "sh_opacity", "sh_opacity_scale", "sh_opacity_geom",
         "dc_ycc_only", "sh_opacity_dc_ycc"
     ])
-    ap.add_argument("--verify_endpoints", action="store_true", default=True)
+    ap.add_argument(
+        "--blend_endpoint_mode",
+        choices=["copy", "blend"],
+        default="copy",
+        help="How alpha=0/1 endpoints are handled when blending. copy=old strict endpoints (alpha=0 exact RGB, alpha=1 exact Thermal). blend=continuous endpoints (alpha=0/1 produced by same rules as intermediates).",
+    )
+    ap.add_argument(
+        "--verify_endpoints",
+        action="store_true",
+        default=False,
+        help="After blending each method, load alpha=0 and alpha=1 PLYs and print max-abs diffs vs expected (sanity check only; does not change outputs).",
+    )
 
     # Eval sweep
-    ap.add_argument("--auto_render", action="store_true", default=True)
+    ap.add_argument("--auto_render", dest="auto_render", action="store_true", default=True,
+                    help="Auto-render blended models during eval sweep (default: enabled).")
+    ap.add_argument("--no_auto_render", dest="auto_render", action="store_false",
+                    help="Disable auto-render during eval sweep.")
 
     args = ap.parse_args()
 
     # Validate step range
     if args.from_step < 1 or args.to_step > 14 or args.from_step > args.to_step:
         ap.error("--from_step/--to_step must satisfy 1 <= from_step <= to_step <= 14")
-
 
     gs_root = Path(__file__).resolve().parent  # gaussian-splatting repo root
     py = sys.executable
@@ -444,7 +518,6 @@ def main() -> None:
     def _in_step_range(n: int) -> bool:
         return args.from_step <= n <= args.to_step
 
-
     def maybe_run(cmd: List[str], cwd: Optional[Path] = None):
         if args.dry_run:
             cmd2 = _normalize_cmd_for_windows(cmd)
@@ -462,17 +535,24 @@ def main() -> None:
         eprint(f"[INFO] Cleaning fit dir: {fit_dir}")
         shutil.rmtree(fit_dir)
 
-    cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir), "--align", "both", "--stage", "both" ,"--comparison"]
+    cfr_cmd = [
+        py, "cfr.py",
+        "--rgb_dir", str(rgb_dir),
+        "--th_dir", str(th_dir),
+        "--out_dir", str(fit_dir),
+        "--align", "both",
+        "--stage", "both",
+    ]
     if args.comparison:
         cfr_cmd.append("--comparison")
 
     cfr_outputs_ok = cand_fit.exists() and cand_exif.exists() and (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
+
     if not _in_step_range(1):
         eprint("[SKIP] 01_cfr (outside selected step range)")
     elif not should_skip_step(state_dir, "01_cfr", cfr_cmd, outputs_ok=cfr_outputs_ok, force=args.force):
         ensure_dir(fit_dir)
         maybe_run(cfr_cmd, cwd=gs_root)
-        # re-evaluate
         cfr_outputs_ok = cand_fit.exists() and cand_exif.exists() and (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
         if not cfr_outputs_ok:
             raise FileNotFoundError(f"Expected cfr outputs missing. Need both:\n  {cand_fit}\n  {cand_exif}")
@@ -481,16 +561,19 @@ def main() -> None:
     # -------- 2) Evaluate crop candidates (fit + exif)
     ensure_dir(metrics_out)
     summary_all = metrics_out / "summary_all.json"
-    eval_cmd_base = [py, "eval_crop_metrics.py", "--th_dir", str(th_dir),
-                     "--rgb_dir", str(cand_fit), "--rgb_dir", str(cand_exif),
-                     "--tag", "fit", "--tag", "exif",
-                     "--out_dir", str(metrics_out)]
+    eval_cmd_base = [
+        py, "eval_crop_metrics.py",
+        "--th_dir", str(th_dir),
+        "--rgb_dir", str(cand_fit),
+        "--rgb_dir", str(cand_exif),
+        "--tag", "fit",
+        "--tag", "exif",
+        "--out_dir", str(metrics_out),
+    ]
     eval_outputs_ok = summary_all.exists() and summary_all.stat().st_size > 50
 
     if not _in_step_range(2):
-
         eprint("[SKIP] 02_eval_crop (outside selected step range)")
-
     elif not should_skip_step(state_dir, "02_eval_crop", eval_cmd_base, outputs_ok=eval_outputs_ok, force=args.force):
         # Try with --ssim first (if available), then fallback without it.
         try:
@@ -498,6 +581,7 @@ def main() -> None:
         except subprocess.CalledProcessError:
             eprint("[WARN] eval_crop_metrics.py failed with --ssim. Retrying without --ssim ...")
             maybe_run(eval_cmd_base, cwd=gs_root)
+
         eval_outputs_ok = summary_all.exists() and summary_all.stat().st_size > 50
         if not eval_outputs_ok:
             raise FileNotFoundError(f"summary_all.json not found or empty: {summary_all}")
@@ -516,18 +600,15 @@ def main() -> None:
         chosen_dir = best.rgb_dir
         eprint(f"[INFO] Auto-picked candidate: {chosen_tag}  (from {summary_all})")
 
-    # Prepare input dir
     if args.clean_input and input_dir.exists():
         eprint(f"[INFO] Cleaning input dir: {input_dir}")
         shutil.rmtree(input_dir)
 
-    prep_cmd = [py, "-c", f"print('prepare_input: {chosen_tag} -> {input_dir}')"]  # marker cmd (informational)
+    prep_cmd = [py, "-c", f"print('prepare_input: {chosen_tag} -> {input_dir}')"]
     prep_outputs_ok = input_dir.exists() and (len(list_images(input_dir)) > 0)
 
     if not _in_step_range(3):
-
         eprint("[SKIP] 03_prepare_input (outside selected step range)")
-
     elif not should_skip_step(state_dir, "03_prepare_input", prep_cmd, outputs_ok=prep_outputs_ok, force=args.force):
         prepare_input_dir(chosen_dir, data_root, clean=False, link_mode=args.link_mode)
         prep_outputs_ok = input_dir.exists() and (len(list_images(input_dir)) > 0)
@@ -551,16 +632,14 @@ def main() -> None:
         "--min_model_size", str(args.min_model_size),
         "--init_min_num_inliers", str(args.init_min_num_inliers),
         "--abs_pose_min_num_inliers", str(args.abs_pose_min_num_inliers),
-        "--use_model_aligner",
-        "--model_aligner_args", str(args.model_aligner_args),
     ]
+    if args.use_model_aligner:
+        convert_cmd += ["--use_model_aligner", "--model_aligner_args", str(args.model_aligner_args)]
 
     convert_outputs_ok = sparse_aligned.exists() and contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3)
 
     if not _in_step_range(4):
-
         eprint("[SKIP] 04_convert_gtgs (outside selected step range)")
-
     elif not should_skip_step(state_dir, "04_convert_gtgs", convert_cmd, outputs_ok=convert_outputs_ok, force=args.force):
         maybe_run(convert_cmd, cwd=gs_root)
         convert_outputs_ok = sparse_aligned.exists() and contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3)
@@ -568,7 +647,6 @@ def main() -> None:
             raise FileNotFoundError(f"Aligned sparse model not found/invalid: {sparse_aligned}")
         write_marker(marker_path(state_dir, "04_convert_gtgs"), "04_convert_gtgs", convert_cmd, cwd=gs_root)
 
-    # Optional early stop after COLMAP
     if args.to_step <= 4:
         eprint("[INFO] Step range ends at 04_convert_gtgs. Done.")
         return
@@ -601,7 +679,41 @@ def main() -> None:
         "--lambda_dssim", str(args.rgb_lambda_dssim),
     ]
 
+    # --- ADP-Texture for Stage-1 RGB (optional) ---
+    if args.rgb_adp_profile != "off":
+        train1_cmd += [
+            "--adp_enabled",
+            "--adp_tex_interval", str(args.rgb_adp_tex_interval),
+            "--adp_log_interval", str(args.rgb_adp_log_interval),
+        ]
+        if args.rgb_adp_no_cycle_print:
+            train1_cmd.append("--adp_no_cycle_print")
+
+        if args.rgb_adp_log:
+            train1_cmd += [
+                "--adp_csv_log",
+                "--adp_iter_csv_log",
+                "--adp_iter_csv_interval", str(args.rgb_adp_iter_csv_interval),
+            ]
+
+        # Profile presets
+        if args.rgb_adp_profile == "aggressive":
+            train1_cmd += [
+                "--adp_bad_streak_kill", "2",
+                "--adp_q_tex_gate_init", "0.70", "--adp_q_tex_gate_final", "0.90",
+                "--adp_q_tex_prune_init", "0.25", "--adp_q_tex_prune_final", "0.45",
+                "--adp_q_spark", "0.90",
+            ]
+        elif args.rgb_adp_profile == "conservative":
+            train1_cmd += [
+                "--adp_bad_streak_kill", "4",
+                "--adp_q_tex_gate_init", "0.50", "--adp_q_tex_gate_final", "0.75",
+                "--adp_q_tex_prune_init", "0.15", "--adp_q_tex_prune_final", "0.25",
+                "--adp_q_spark", "0.97",
+            ]
+
     train1_outputs_ok = ckpt_rgb.exists()
+
     if not _in_step_range(5):
         eprint("[SKIP] 05_train_rgb (outside selected step range)")
     elif not should_skip_step(state_dir, "05_train_rgb", train1_cmd, outputs_ok=train1_outputs_ok, force=args.force):
@@ -611,34 +723,40 @@ def main() -> None:
             raise FileNotFoundError(f"RGB checkpoint not found after training: {ckpt_rgb}")
         write_marker(marker_path(state_dir, "05_train_rgb"), "05_train_rgb", train1_cmd, cwd=gs_root)
 
-    # Render RGB (keep -r consistent with training to avoid mismatched intrinsics/resolution)
+    # Optional: generate paper-ready ADP plots for RGB stage
+    if _in_step_range(5) and args.rgb_adp_profile != "off" and args.rgb_adp_plot_paper:
+        plot_script = gs_root / "tools" / "plot_adp_paper_fig.py"
+        plot_out_dir = model_rgb / "adp_plots_paper"
+        plot_outputs_ok = plot_out_dir.exists() and dir_has_any_suffix_recursive(plot_out_dir, (".png", ".pdf"))
+        plot_cmd = [py, str(plot_script), "--log_dir", str(model_rgb)]
+        if plot_script.exists():
+            if not should_skip_step(state_dir, "05b_plot_adp_rgb", plot_cmd, outputs_ok=plot_outputs_ok, force=args.force):
+                maybe_run(plot_cmd, cwd=gs_root)
+                write_marker(marker_path(state_dir, "05b_plot_adp_rgb"), "05b_plot_adp_rgb", plot_cmd, cwd=gs_root)
+        else:
+            eprint(f"[WARN] ADP plot script not found: {plot_script} (skipping)")
+
+    # -------- 6) Render RGB
     render1_cmd = [py, "render.py", "-m", str(model_rgb), "-s", str(data_root), "-r", str(args.rgb_res)]
-    render1_outputs_ok = (model_rgb / "test").exists() and contains_any_file(model_rgb / "test", ("00000.png",), max_depth=5)  # weak check
-    # Better: any image in test dir
-    if (model_rgb / "test").exists():
-        try:
-            render1_outputs_ok = any(p.suffix.lower() in (".png", ".jpg", ".jpeg") for p in (model_rgb / "test").rglob("*"))
-        except Exception:
-            pass
+    render1_outputs_ok = (model_rgb / "test").exists() and dir_has_any_images_recursive(model_rgb / "test")
 
     if not _in_step_range(6):
-
         eprint("[SKIP] 06_render_rgb (outside selected step range)")
-
     elif not should_skip_step(state_dir, "06_render_rgb", render1_cmd, outputs_ok=render1_outputs_ok, force=args.force):
         maybe_run(render1_cmd, cwd=gs_root)
         write_marker(marker_path(state_dir, "06_render_rgb"), "06_render_rgb", render1_cmd, cwd=gs_root)
 
+    # -------- 7) Metrics RGB
     metrics1_cmd = [py, "metrics.py", "-m", str(model_rgb)]
     metrics1_outputs_ok = (model_rgb / "results.json").exists() or (model_rgb / "results.txt").exists()
+
     if not _in_step_range(7):
         eprint("[SKIP] 07_metrics_rgb (outside selected step range)")
     elif not should_skip_step(state_dir, "07_metrics_rgb", metrics1_cmd, outputs_ok=metrics1_outputs_ok, force=args.force):
         maybe_run(metrics1_cmd, cwd=gs_root)
-        # even if we can't detect output, write marker so reruns can skip
         write_marker(marker_path(state_dir, "07_metrics_rgb"), "07_metrics_rgb", metrics1_cmd, cwd=gs_root)
 
-    # -------- 6) Undistort thermal using aligned sparse model
+    # -------- 8) Undistort thermal using aligned sparse model
     if args.clean_thermal_ud and thermal_ud.exists():
         eprint(f"[INFO] Cleaning existing thermal_UD: {thermal_ud}")
         shutil.rmtree(thermal_ud)
@@ -650,8 +768,13 @@ def main() -> None:
         "--output_path", str(thermal_ud),
         "--output_type", "COLMAP",
     ]
-    undistort_outputs_ok = thermal_ud.exists() and (thermal_ud / "images").exists() and (len(list_images(thermal_ud / "images")) > 0) and (thermal_ud / "sparse").exists()
-    # Preflight: step 08 requires sparse_aligned from step 04
+    undistort_outputs_ok = (
+        thermal_ud.exists()
+        and (thermal_ud / "images").exists()
+        and (len(list_images(thermal_ud / "images")) > 0)
+        and (thermal_ud / "sparse").exists()
+    )
+
     if _in_step_range(8):
         if not sparse_aligned.exists() or not contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3):
             raise FileNotFoundError(
@@ -666,20 +789,23 @@ def main() -> None:
         eprint("[SKIP] 08_undistort_thermal (outside selected step range)")
     elif not should_skip_step(state_dir, "08_undistort_thermal", undistort_cmd, outputs_ok=undistort_outputs_ok, force=args.force):
         maybe_run(undistort_cmd, cwd=gs_root)
-        undistort_outputs_ok = thermal_ud.exists() and (thermal_ud / "images").exists() and (len(list_images(thermal_ud / "images")) > 0) and (thermal_ud / "sparse").exists()
+        undistort_outputs_ok = (
+            thermal_ud.exists()
+            and (thermal_ud / "images").exists()
+            and (len(list_images(thermal_ud / "images")) > 0)
+            and (thermal_ud / "sparse").exists()
+        )
         if not undistort_outputs_ok:
             raise FileNotFoundError(f"thermal_UD seems incomplete: {thermal_ud}")
         write_marker(marker_path(state_dir, "08_undistort_thermal"), "08_undistort_thermal", undistort_cmd, cwd=gs_root)
 
-    # -------- 7) Normalize sparse layout for thermal_UD
+    # -------- 9) Normalize sparse layout for thermal_UD
     sparse_dir_ud = thermal_ud / "sparse"
-    norm_cmd = [py, "-c", f"print('ensure_sparse_0: {sparse_dir_ud}')"]  # marker cmd
+    norm_cmd = [py, "-c", f"print('ensure_sparse_0: {sparse_dir_ud}')"]
     norm_outputs_ok = (sparse_dir_ud / "0").exists() and contains_any_file(sparse_dir_ud / "0", ("cameras.bin", "cameras.txt"), max_depth=1)
 
     if not _in_step_range(9):
-
         eprint("[SKIP] 09_normalize_sparse_ud (outside selected step range)")
-
     elif not should_skip_step(state_dir, "09_normalize_sparse_ud", norm_cmd, outputs_ok=norm_outputs_ok, force=args.force):
         ensure_sparse_0(sparse_dir_ud)
         norm_outputs_ok = (sparse_dir_ud / "0").exists() and contains_any_file(sparse_dir_ud / "0", ("cameras.bin", "cameras.txt"), max_depth=1)
@@ -687,7 +813,7 @@ def main() -> None:
             raise FileNotFoundError(f"thermal_UD sparse/0 not found or missing cameras.*: {sparse_dir_ud / '0'}")
         write_marker(marker_path(state_dir, "09_normalize_sparse_ud"), "09_normalize_sparse_ud", norm_cmd, cwd=gs_root)
 
-    # -------- 8) Stage-2 training (Thermal)
+    # -------- 10) Stage-2 training (Thermal)
     ensure_dir(model_t)
     ckpt_t = model_t / f"chkpnt{args.t_iter}.pth"
     if not ckpt_rgb.exists():
@@ -721,7 +847,7 @@ def main() -> None:
     ]
 
     train2_outputs_ok = ckpt_t.exists()
-    # Preflight: step 10 requires stage-1 checkpoint and thermal_UD dataset
+
     if _in_step_range(10):
         if not ckpt_rgb.exists():
             raise FileNotFoundError(
@@ -740,31 +866,26 @@ def main() -> None:
             raise FileNotFoundError(f"Thermal checkpoint not found after training: {ckpt_t}")
         write_marker(marker_path(state_dir, "10_train_thermal"), "10_train_thermal", train2_cmd, cwd=gs_root)
 
+    # -------- 11) Render Thermal
     render2_cmd = [py, "render.py", "-m", str(model_t), "-s", str(thermal_ud), "-r", str(args.t_res)]
-    render2_outputs_ok = (model_t / "test").exists()
-    if (model_t / "test").exists():
-        try:
-            render2_outputs_ok = any(p.suffix.lower() in (".png", ".jpg", ".jpeg") for p in (model_t / "test").rglob("*"))
-        except Exception:
-            pass
+    render2_outputs_ok = (model_t / "test").exists() and dir_has_any_images_recursive(model_t / "test")
 
     if not _in_step_range(11):
-
         eprint("[SKIP] 11_render_thermal (outside selected step range)")
-
     elif not should_skip_step(state_dir, "11_render_thermal", render2_cmd, outputs_ok=render2_outputs_ok, force=args.force):
         maybe_run(render2_cmd, cwd=gs_root)
         write_marker(marker_path(state_dir, "11_render_thermal"), "11_render_thermal", render2_cmd, cwd=gs_root)
 
+    # -------- 12) Metrics Thermal
     metrics2_cmd = [py, "metrics.py", "-m", str(model_t)]
     metrics2_outputs_ok = (model_t / "results.json").exists() or (model_t / "results.txt").exists()
+
     if not _in_step_range(12):
         eprint("[SKIP] 12_metrics_thermal (outside selected step range)")
     elif not should_skip_step(state_dir, "12_metrics_thermal", metrics2_cmd, outputs_ok=metrics2_outputs_ok, force=args.force):
         maybe_run(metrics2_cmd, cwd=gs_root)
         write_marker(marker_path(state_dir, "12_metrics_thermal"), "12_metrics_thermal", metrics2_cmd, cwd=gs_root)
 
-    # Optional early stop after stage-2
     if args.to_step <= 12:
         eprint("[INFO] Step range ends at 12_metrics_thermal. Done.")
         return
@@ -776,7 +897,7 @@ def main() -> None:
             eprint("[INFO] --skip_blend set. Stopping after stage-2 training.")
             return
 
-    # -------- 9) Blend models
+    # -------- 13) Blend models
     if args.clean_blend_out and model_f.exists():
         eprint(f"[INFO] Cleaning existing blend output: {model_f}")
         shutil.rmtree(model_f)
@@ -788,17 +909,17 @@ def main() -> None:
         "--alphas", str(args.alphas),
         "--out_root", str(model_f),
         "--out_iter", str(args.t_iter),
+        "--endpoint_mode", str(args.blend_endpoint_mode),
         "--methods",
     ] + list(args.methods)
 
     if args.verify_endpoints:
         blend_cmd.append("--verify_endpoints")
-    # only add clean_out when explicitly requested (so resume works)
     if args.clean_blend_out:
         blend_cmd.append("--clean_out")
 
     blend_outputs_ok = model_f.exists() and any(p.is_dir() for p in model_f.iterdir())
-    # Preflight: step 13 requires RGB/T trained point clouds at requested iterations
+
     if _in_step_range(13):
         rgb_ply = model_rgb / "point_cloud" / f"iteration_{args.rgb_iter}" / "point_cloud.ply"
         t_ply = model_t / "point_cloud" / f"iteration_{args.t_iter}" / "point_cloud.ply"
@@ -822,7 +943,7 @@ def main() -> None:
             raise FileNotFoundError(f"Blend output looks empty: {model_f}")
         write_marker(marker_path(state_dir, "13_blend"), "13_blend", blend_cmd, cwd=gs_root)
 
-    # -------- 10) Evaluate sweep
+    # -------- 14) Evaluate sweep
     ensure_dir(eval_out)
     sweep_cmd = [
         py, "eval_blend_sweep.py",
@@ -835,6 +956,7 @@ def main() -> None:
         sweep_cmd.append("--auto_render")
 
     sweep_outputs_ok = (eval_out / "summary.csv").exists() and (eval_out / "summary.csv").stat().st_size > 50
+
     if not _in_step_range(14):
         eprint("[SKIP] 14_eval_sweep (outside selected step range)")
     elif not should_skip_step(state_dir, "14_eval_sweep", sweep_cmd, outputs_ok=sweep_outputs_ok, force=args.force):
