@@ -71,6 +71,7 @@ class GaussianModel:
         self.adp_spark_ema = torch.empty(0)     # (N,1) EMA of sparkle risk proxy
         self.adp_vis_count = torch.empty(0)     # (N,1) visibility counter (for analysis)
         self.adp_bad_streak = torch.empty(0, dtype=torch.int32)  # (N,1) persistent artifact counter
+        self._adp_last_cycle_stats = {}  # ADP cycle stats cache for logging
 
         # Hyperparameters (can be overridden via OptimizationParams)
         self.adp_tex_beta = 0.05
@@ -90,9 +91,6 @@ class GaussianModel:
         self.adp_q_grad_init = 0.70
         self.adp_q_grad_final = 0.90
         self.adp_q_spark = 0.95
-        # Runtime stats for logging (not checkpointed)
-        self.adp_last_iter_stats = {}
-        self.adp_last_cycle_stats = {}
         self.setup_functions()
     def capture(self):
         return (
@@ -203,9 +201,92 @@ class GaussianModel:
         self.adp_spark_ema = ensure_tensor(self.adp_spark_ema)
         self.adp_vis_count = ensure_tensor(self.adp_vis_count)
         self.adp_bad_streak = ensure_tensor(self.adp_bad_streak, dtype=torch.int32)
+    def get_adp_log_dict(self, prefix: str = "") -> dict:
+        """Return a dict of ADP-related scalars for logging.
 
+        Safe to call even when ADP is disabled. Values are Python floats/ints.
+        If `prefix` is provided, it is prepended to all keys (e.g., "adp_").
+        """
+        try:
+            import torch
+        except Exception:
+            torch = None  # type: ignore
 
+        def _to_float(v):
+            if v is None:
+                return None
+            if torch is not None and isinstance(v, torch.Tensor):
+                if v.numel() == 0:
+                    return None
+                if v.numel() == 1:
+                    return float(v.detach().item())
+                return float(v.detach().mean().item())
+            try:
+                return float(v)
+            except Exception:
+                return None
 
+        def _stats_1d(t, name: str):
+            out = {}
+            if torch is None or t is None or (not isinstance(t, torch.Tensor)) or t.numel() == 0:
+                return out
+            x = t.detach().view(-1).float()
+            # Downsample for quantiles to keep logging cheap on large scenes
+            if x.numel() > 65536:
+                step = max(1, x.numel() // 65536)
+                x = x[::step]
+
+            try:
+                out[f"{name}_mean"] = float(x.mean().item())
+                out[f"{name}_p50"] = float(torch.quantile(x, 0.50).item()) if x.numel() >= 32 else float(x.median().item())
+                if x.numel() >= 64:
+                    out[f"{name}_p10"] = float(torch.quantile(x, 0.10).item())
+                    out[f"{name}_p90"] = float(torch.quantile(x, 0.90).item())
+                out[f"{name}_min"] = float(x.min().item())
+                out[f"{name}_max"] = float(x.max().item())
+            except Exception:
+                # never crash training for logging
+                return out
+            return out
+
+        d = {}
+        # point count
+        try:
+            d["total_points"] = int(self.get_xyz.shape[0])
+        except Exception:
+            d["total_points"] = 0
+
+        d["enabled"] = int(bool(getattr(self, "adp_enabled", False)))
+
+        # per-point aggregates
+        d.update(_stats_1d(getattr(self, "adp_tex_ema", None), "tex_ema"))
+        d.update(_stats_1d(getattr(self, "adp_spark_ema", None), "spark_ema"))
+        d.update(_stats_1d(getattr(self, "adp_vis_count", None), "vis_count"))
+        d.update(_stats_1d(getattr(self, "adp_bad_streak", None), "bad_streak"))
+
+        # static hyperparams
+        for k in [
+            "adp_tex_beta", "adp_spark_beta", "adp_bad_streak_kill", "adp_bad_streak_decay",
+            "adp_q_tex_gate_init", "adp_q_tex_gate_final",
+            "adp_q_tex_prune_init", "adp_q_tex_prune_final",
+            "adp_q_grad_init", "adp_q_grad_final",
+            "adp_q_spark", "adp_eps",
+        ]:
+            if hasattr(self, k):
+                d[k] = _to_float(getattr(self, k))
+
+        # last cycle stats (populated in densify_and_prune)
+        last = getattr(self, "_adp_last_cycle_stats", None)
+        if isinstance(last, dict) and last:
+            d.update(last)
+
+        if prefix:
+            return {f"{prefix}{k}": v for k, v in d.items()}
+        return d
+
+    # compat alias (some train.py versions call this)
+    def get_adp_iter_log_dict(self, prefix: str = "") -> dict:
+        return self.get_adp_log_dict(prefix=prefix)
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
@@ -537,7 +618,16 @@ class GaussianModel:
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         if extra_mask is not None:
-            selected_pts_mask = torch.logical_and(selected_pts_mask, extra_mask)
+            # Robust: allow size mismatch (e.g., caller mask computed before a densify op)
+            if extra_mask.numel() != selected_pts_mask.numel():
+                if extra_mask.numel() < selected_pts_mask.numel():
+                    pad = torch.zeros((selected_pts_mask.numel() - extra_mask.numel(),), device=extra_mask.device, dtype=extra_mask.dtype)
+                    extra_mask_ = torch.cat((extra_mask, pad), dim=0)
+                else:
+                    extra_mask_ = extra_mask[: selected_pts_mask.numel()]
+            else:
+                extra_mask_ = extra_mask
+            selected_pts_mask = torch.logical_and(selected_pts_mask, extra_mask_)
 
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
@@ -574,7 +664,16 @@ class GaussianModel:
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         if extra_mask is not None:
-            selected_pts_mask = torch.logical_and(selected_pts_mask, extra_mask)
+            # Robust: extra_mask may be computed on pre-densify point count (clone adds points before split)
+            if extra_mask.numel() != selected_pts_mask.numel():
+                if extra_mask.numel() < selected_pts_mask.numel():
+                    pad = torch.zeros((selected_pts_mask.numel() - extra_mask.numel(),), device=extra_mask.device, dtype=extra_mask.dtype)
+                    extra_mask_ = torch.cat((extra_mask, pad), dim=0)
+                else:
+                    extra_mask_ = extra_mask[: selected_pts_mask.numel()]
+            else:
+                extra_mask_ = extra_mask
+            selected_pts_mask = torch.logical_and(selected_pts_mask, extra_mask_)
 
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
@@ -605,22 +704,18 @@ class GaussianModel:
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii, iteration=None, densify_from_iter=None, densify_until_iter=None):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+        # ADP cycle stats cache
+        N_before = int(self.get_xyz.shape[0])
 
         self.tmp_radii = radii
-
-        # --- ADP logging stats (cycle-level) ---
-        stats = {}
-        try:
-            stats["N_before"] = int(self.get_xyz.shape[0])
-        except Exception:
-            stats["N_before"] = 0
-        if iteration is not None:
-            stats["iteration"] = int(iteration)
 
         # ADP gating / adaptive thresholds
         extra_mask = None
         grad_thr = max_grad
         adp_prune_mask = None
+        tex_thr_gate = None
+        tex_thr_prune = None
+        spark_thr = None
 
         if self.adp_enabled and isinstance(self.adp_tex_ema, torch.Tensor) and self.adp_tex_ema.numel() == self.get_xyz.shape[0]:
             # Progress in [0,1] for schedules
@@ -628,18 +723,13 @@ class GaussianModel:
                 p = 1.0
             else:
                 p = float(max(0.0, min(1.0, (iteration - densify_from_iter) / float(max(1, densify_until_iter - densify_from_iter)))))
-            stats["progress"] = float(p)
 
             def lerp(a, b, t):
                 return a + (b - a) * t
 
-            q_tex_gate = float(lerp(self.adp_q_tex_gate_init, self.adp_q_tex_gate_final, p))
-            q_tex_prune = float(lerp(self.adp_q_tex_prune_init, self.adp_q_tex_prune_final, p))
-            q_grad = float(lerp(self.adp_q_grad_init, self.adp_q_grad_final, p))
-            stats["q_tex_gate"] = q_tex_gate
-            stats["q_tex_prune"] = q_tex_prune
-            stats["q_grad"] = q_grad
-            stats["q_spark"] = float(self.adp_q_spark)
+            q_tex_gate = lerp(self.adp_q_tex_gate_init, self.adp_q_tex_gate_final, p)
+            q_tex_prune = lerp(self.adp_q_tex_prune_init, self.adp_q_tex_prune_final, p)
+            q_grad = lerp(self.adp_q_grad_init, self.adp_q_grad_final, p)
 
             tex = self.adp_tex_ema.squeeze(-1)
             g = grads.squeeze(-1)
@@ -658,22 +748,18 @@ class GaussianModel:
             # Densify gate: require sufficiently high texture support
             tex_thr_gate = safe_quantile(tex, q_tex_gate, default=torch.tensor(0.0, device=tex.device, dtype=tex.dtype))
             extra_mask = tex >= tex_thr_gate
-            stats["tex_thr_gate"] = float(tex_thr_gate.item()) if hasattr(tex_thr_gate, "item") else float(tex_thr_gate)
 
             # Adaptive grad threshold computed on gated set (fallback to max_grad)
             if extra_mask.any():
                 grad_thr_adp = safe_quantile(g[extra_mask], q_grad, default=torch.tensor(float(max_grad), device=g.device, dtype=g.dtype))
-                grad_thr = torch.maximum(torch.tensor(float(max_grad), device=g.device, dtype=g.dtype), grad_thr_adp)
-            stats["grad_thr"] = float(grad_thr.item()) if hasattr(grad_thr, "item") else float(grad_thr)
+                grad_thr_tensor = torch.maximum(torch.tensor(float(max_grad), device=g.device, dtype=g.dtype), grad_thr_adp)
+                grad_thr = grad_thr_tensor
 
             # Persistent prune: low texture + high sparkle (a.k.a. "sky sparkles")
             tex_thr_prune = safe_quantile(tex, q_tex_prune, default=torch.tensor(0.0, device=tex.device, dtype=tex.dtype))
-            spark_thr = safe_quantile(spark, float(self.adp_q_spark), default=torch.tensor(float("inf"), device=spark.device, dtype=spark.dtype))
-            stats["tex_thr_prune"] = float(tex_thr_prune.item()) if hasattr(tex_thr_prune, "item") else float(tex_thr_prune)
-            stats["spark_thr"] = float(spark_thr.item()) if hasattr(spark_thr, "item") else float(spark_thr)
+            spark_thr = safe_quantile(spark, self.adp_q_spark, default=torch.tensor(float("inf"), device=spark.device, dtype=spark.dtype))
 
             bad_now = torch.logical_and(tex < tex_thr_prune, spark > spark_thr)
-            stats["bad_now_count"] = int(bad_now.sum().item())
 
             # Update streak counters
             bs = self.adp_bad_streak.squeeze(-1)
@@ -683,72 +769,100 @@ class GaussianModel:
             else:
                 bs[~bad_now] = bs[~bad_now] * 0
             self.adp_bad_streak = bs.unsqueeze(-1)
-            stats["bad_streak_max"] = int(bs.max().item()) if bs.numel() > 0 else 0
-
             adp_prune_mask = bs >= int(self.adp_bad_streak_kill)
-            stats["adp_prune_count"] = int(adp_prune_mask.sum().item())
-
-            # Gate counts (over current points)
-            stats["gate_pass"] = int(extra_mask.sum().item()) if extra_mask is not None else 0
-            stats["gate_ratio"] = float(stats["gate_pass"] / max(1, int(self.get_xyz.shape[0])))
-
-            # Densify candidate counts (approx)
-            try:
-                thr = (grad_thr if isinstance(grad_thr, torch.Tensor) else float(grad_thr))
-                cand = (g.abs() >= thr).sum()
-                stats["densify_candidates"] = int(cand.item())
-                if extra_mask is not None:
-                    cand_g = torch.logical_and(g.abs() >= thr, extra_mask).sum()
-                    stats["densify_candidates_gated"] = int(cand_g.item())
-            except Exception:
-                pass
 
         # Densification (with optional gate)
         self.densify_and_clone(grads, grad_thr, extent, extra_mask=extra_mask)
         self.densify_and_split(grads, grad_thr, extent, extra_mask=extra_mask)
 
-        # Record size after densify (before final prune)
+        N_after_densify = int(self.get_xyz.shape[0])
+        # Approx densify candidate counts (based on pre-densify grads)
         try:
-            stats["N_after_densify"] = int(self.get_xyz.shape[0])
+            g1 = grads.squeeze(-1)
+            thr_val = float(grad_thr.item()) if hasattr(grad_thr, 'item') else float(grad_thr)
+            densify_candidates = int((g1 >= thr_val).sum().item())
+            if extra_mask is not None and extra_mask.numel() == g1.numel():
+                densify_candidates_gated = int(((g1 >= thr_val) & extra_mask).sum().item())
+            else:
+                densify_candidates_gated = densify_candidates
         except Exception:
-            stats["N_after_densify"] = 0
+            densify_candidates = None
+            densify_candidates_gated = None
+
 
         # Official pruning rules
-        prune_mask_official = (self.get_opacity < min_opacity).squeeze()
+        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        prune_official_count = int(prune_mask.sum().item())
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
-            prune_mask_official = torch.logical_or(torch.logical_or(prune_mask_official, big_points_vs), big_points_ws)
+            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
 
         # ADP persistent prune
-        prune_mask = prune_mask_official
         if adp_prune_mask is not None:
+            # Robust: densification may have changed point count (new points should not be pruned by ADP streak)
+            if adp_prune_mask.numel() != prune_mask.numel():
+                if adp_prune_mask.numel() < prune_mask.numel():
+                    pad = torch.zeros((prune_mask.numel() - adp_prune_mask.numel(),), device=adp_prune_mask.device, dtype=adp_prune_mask.dtype)
+                    adp_prune_mask = torch.cat((adp_prune_mask, pad), dim=0)
+                else:
+                    adp_prune_mask = adp_prune_mask[: prune_mask.numel()]
             prune_mask = torch.logical_or(prune_mask, adp_prune_mask)
 
-        stats["prune_official_count"] = int(prune_mask_official.sum().item()) if isinstance(prune_mask_official, torch.Tensor) else 0
-        stats["prune_total_count"] = int(prune_mask.sum().item()) if isinstance(prune_mask, torch.Tensor) else 0
-
+        prune_total_count = int(prune_mask.sum().item())
         self.prune_points(prune_mask)
+        N_after_prune = int(self.get_xyz.shape[0])
+
+        # Update ADP cycle stats cache (used by get_adp_log_dict and CSV logging).
+        try:
+            gate_total = int(N_before)
+            gate_pass = int(extra_mask.sum().item()) if (extra_mask is not None and hasattr(extra_mask, 'sum')) else int(N_before)
+            gate_ratio = float(gate_pass) / float(gate_total) if gate_total > 0 else 0.0
+        except Exception:
+            gate_total, gate_pass, gate_ratio = None, None, None
 
         try:
-            stats["N_after_prune"] = int(self.get_xyz.shape[0])
+            adp_prune_count = int(adp_prune_mask.sum().item()) if (adp_prune_mask is not None and hasattr(adp_prune_mask, 'sum')) else None
         except Exception:
-            stats["N_after_prune"] = 0
+            adp_prune_count = None
 
-        # Save cycle stats for external logging
-        self.adp_last_cycle_stats = stats
+        def _tfloat(x):
+            try:
+                import torch
+                if isinstance(x, torch.Tensor):
+                    return float(x.detach().item()) if x.numel()==1 else float(x.detach().mean().item())
+            except Exception:
+                pass
+            try:
+                return float(x)
+            except Exception:
+                return None
 
+        self._adp_last_cycle_stats = {
+            'N_before': N_before,
+            'N_after_densify': N_after_densify,
+            'N_after_prune': N_after_prune,
+            'gate_total': gate_total,
+            'gate_pass': gate_pass,
+            'gate_ratio': gate_ratio,
+            'densify_candidates': densify_candidates,
+            'densify_candidates_gated': densify_candidates_gated,
+            'tex_thr_gate': _tfloat(tex_thr_gate),
+            'tex_thr_prune': _tfloat(tex_thr_prune),
+            'spark_thr': _tfloat(spark_thr),
+            'grad_thr': _tfloat(grad_thr),
+            'prune_official_count': prune_official_count,
+            'adp_prune_count': adp_prune_count,
+            'prune_total_count': prune_total_count,
+        }
         self.tmp_radii = None
+
         torch.cuda.empty_cache()
-
-
     def add_densification_stats(self, viewspace_point_tensor, update_filter, radii=None, tex_values=None):
         # update_filter is typically a boolean mask for visible points
         if update_filter is None or update_filter.numel() == 0:
             return
         idx = update_filter.squeeze(-1) if update_filter.dim() > 1 else update_filter
-        if idx.numel() == 0:
-            return
 
         self.xyz_gradient_accum[idx] += torch.norm(viewspace_point_tensor.grad[idx, :2], dim=-1, keepdim=True)
         self.denom[idx] += 1
@@ -756,19 +870,11 @@ class GaussianModel:
         if not self.adp_enabled:
             return
 
-        # Default per-iter log (visibility always available)
-        iter_stats = {"visible": int(idx.numel())}
-
         # Texture support (EMA in [0,1])
         if tex_values is not None:
             tv = tex_values.detach().view(-1, 1).clamp(0.0, 1.0)
             self.adp_tex_ema[idx] = (1.0 - self.adp_tex_beta) * self.adp_tex_ema[idx] + self.adp_tex_beta * tv
             self.adp_vis_count[idx] += 1
-            try:
-                iter_stats["tex_mean"] = float(tv.mean().item())
-                iter_stats["tex_ema_mean"] = float(self.adp_tex_ema[idx].mean().item())
-            except Exception:
-                pass
 
         # Sparkle risk (opacity / (radii + eps))
         if radii is not None:
@@ -776,38 +882,4 @@ class GaussianModel:
             op = self.get_opacity[idx].detach()
             spark = op / (r + self.adp_eps)
             self.adp_spark_ema[idx] = (1.0 - self.adp_spark_beta) * self.adp_spark_ema[idx] + self.adp_spark_beta * spark
-            try:
-                iter_stats["spark_mean"] = float(spark.mean().item())
-                iter_stats["spark_ema_mean"] = float(self.adp_spark_ema[idx].mean().item())
-            except Exception:
-                pass
-
-        self.adp_last_iter_stats = iter_stats
-
-
-    def get_adp_log_dict(self, prefix: str = "adp/"):
-        """Return a flat dict of recent ADP stats for TensorBoard / console logging.
-        - iter stats: updated every iteration in add_densification_stats()
-        - cycle stats: updated every densify/prune call in densify_and_prune()
-        """
-        out = {}
-        if isinstance(self.adp_last_iter_stats, dict):
-            for k, v in self.adp_last_iter_stats.items():
-                if v is None:
-                    continue
-                if isinstance(v, (int, float)):
-                    out[prefix + "iter_" + str(k)] = float(v)
-        if isinstance(self.adp_last_cycle_stats, dict):
-            for k, v in self.adp_last_cycle_stats.items():
-                if v is None:
-                    continue
-                if isinstance(v, (int, float)):
-                    out[prefix + "cycle_" + str(k)] = float(v)
-        # Also expose global knobs that matter for reproducibility
-        out[prefix + "enabled"] = float(1.0 if self.adp_enabled else 0.0)
-        out[prefix + "tex_beta"] = float(self.adp_tex_beta)
-        out[prefix + "spark_beta"] = float(self.adp_spark_beta)
-        out[prefix + "bad_streak_kill"] = float(self.adp_bad_streak_kill)
-        out[prefix + "bad_streak_decay"] = float(self.adp_bad_streak_decay)
-        return out
 

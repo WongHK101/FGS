@@ -173,12 +173,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
 
-    depth_l1_weight = get_expon_lr_func(
-        opt.depth_l1_weight_init,
-        opt.depth_l1_weight_final,
-        opt.depth_l1_weight_delay_mult,
-        max_steps=opt.depth_l1_weight_max_steps,
-    )
+    if hasattr(opt, "depth_l1_weight_init") and hasattr(opt, "depth_l1_weight_final"):
+        depth_delay_steps = getattr(opt, "depth_l1_weight_delay_steps", 0)
+        depth_delay_mult  = getattr(opt, "depth_l1_weight_delay_mult", 1.0)
+        depth_max_steps   = getattr(opt, "depth_l1_weight_max_steps", getattr(opt, "iterations", 30000))
+
+        depth_l1_weight = get_expon_lr_func(
+            opt.depth_l1_weight_init,
+            opt.depth_l1_weight_final,
+            lr_delay_steps=depth_delay_steps,
+            lr_delay_mult=depth_delay_mult,
+            max_steps=depth_max_steps,
+        )
+    else:
+        depth_l1_weight = lambda _step: 0.0
 
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn is not None:
