@@ -190,6 +190,15 @@ class GaussianModel:
         N = int(self.get_xyz.shape[0])
         device = self.get_xyz.device
 
+        # If ADP is disabled (baseline runs), keep ADP buffers empty to avoid
+        # shape-sync overhead and any indexing issues during densify/prune.
+        if not self.adp_enabled:
+            self.adp_tex_ema = torch.empty((0, 1), device=device)
+            self.adp_spark_ema = torch.empty((0, 1), device=device)
+            self.adp_vis_count = torch.empty((0, 1), device=device)
+            self.adp_bad_streak = torch.empty((0, 1), device=device, dtype=torch.int32)
+            return
+
         def ensure_tensor(t, dtype=None):
             if (not keep_existing) or (t is None) or (not isinstance(t, torch.Tensor)) or (t.numel() == 0) or (t.shape[0] != N):
                 if dtype is None:
@@ -554,8 +563,32 @@ class GaussianModel:
         self.max_radii2D = self.max_radii2D[valid_points_mask]
         self.tmp_radii = self.tmp_radii[valid_points_mask]
 
-        # ADP buffers
-        if isinstance(self.adp_tex_ema, torch.Tensor) and self.adp_tex_ema.numel() > 0:
+        # ADP buffers (only when ADP enabled). Keep them shape-synced with current point count.
+        if getattr(self, "adp_enabled", False) and isinstance(self.adp_tex_ema, torch.Tensor) and self.adp_tex_ema.numel() > 0:
+            N = int(valid_points_mask.shape[0])
+
+            def _pad_trunc(t: torch.Tensor, fill=0.0, dtype=None):
+                if (not isinstance(t, torch.Tensor)) or (t.numel() == 0):
+                    if dtype is None:
+                        return torch.full((N, 1), float(fill), device=self.get_xyz.device)
+                    return torch.full((N, 1), fill, device=self.get_xyz.device, dtype=dtype)
+
+                if t.shape[0] == N:
+                    return t
+                if t.shape[0] > N:
+                    return t[:N]
+
+                pad_n = N - t.shape[0]
+                pad = torch.full((pad_n, t.shape[1]), float(fill), device=t.device, dtype=t.dtype)
+                return torch.cat((t, pad), dim=0)
+
+            # First align lengths (densify can change point count between ADP updates)
+            self.adp_tex_ema = _pad_trunc(self.adp_tex_ema, fill=0.0)
+            self.adp_spark_ema = _pad_trunc(self.adp_spark_ema, fill=0.0)
+            self.adp_vis_count = _pad_trunc(self.adp_vis_count, fill=0.0)
+            self.adp_bad_streak = _pad_trunc(self.adp_bad_streak, fill=0, dtype=torch.int32)
+
+            # Then apply pruning mask
             self.adp_tex_ema = self.adp_tex_ema[valid_points_mask]
             self.adp_spark_ema = self.adp_spark_ema[valid_points_mask]
             self.adp_vis_count = self.adp_vis_count[valid_points_mask]
