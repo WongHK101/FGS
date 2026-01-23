@@ -1,3 +1,4 @@
+# NOTE: This file is generated for ADPP_COMPAT_v2 integration (GeoTGS/FGS).
 #
 # Copyright (C) 2023, Inria
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
@@ -72,6 +73,16 @@ class GaussianModel:
         self.adp_vis_count = torch.empty(0)     # (N,1) visibility counter (for analysis)
         self.adp_bad_streak = torch.empty(0, dtype=torch.int32)  # (N,1) persistent artifact counter
         self._adp_last_cycle_stats = {}  # ADP cycle stats cache for logging
+
+        # --- ADPP (Adaptive Densification/Pruning Policy) ---
+        # Runtime-only action dict set by train.py (not saved in checkpoints).
+        self._adpp_action = None
+        # Optional densification region constraint mask (N,). When set, densification
+        # is allowed only where this mask is True. Cleared after each densify cycle.
+        self._adpp_densify_extra_mask = None
+        # Cache some ADPP stats for debugging/plots.
+        self._adpp_last_stats = {}
+
 
         # Hyperparameters (can be overridden via OptimizationParams)
         self.adp_tex_beta = 0.05
@@ -805,6 +816,26 @@ class GaussianModel:
             adp_prune_mask = bs >= int(self.adp_bad_streak_kill)
 
         # Densification (with optional gate)
+        # ADPP: optional densify region constraint (set by adpp_pre_densify_hook).
+        adpp_mask = getattr(self, "_adpp_densify_extra_mask", None)
+        if adpp_mask is not None:
+            try:
+                adpp_mask = adpp_mask.to(device=self.get_xyz.device).bool().view(-1)
+                if extra_mask is None:
+                    extra_mask = adpp_mask
+                else:
+                    extra_mask = extra_mask.bool().view(-1)
+                    if adpp_mask.numel() != extra_mask.numel():
+                        # Align lengths conservatively (allow densify on any new tail points).
+                        if adpp_mask.numel() < extra_mask.numel():
+                            pad = torch.ones((extra_mask.numel() - adpp_mask.numel(),), device=extra_mask.device, dtype=torch.bool)
+                            adpp_mask = torch.cat((adpp_mask, pad), dim=0)
+                        else:
+                            adpp_mask = adpp_mask[: extra_mask.numel()]
+                    extra_mask = torch.logical_and(extra_mask, adpp_mask)
+            except Exception:
+                # If anything goes wrong, ignore ADPP mask for safety.
+                pass
         self.densify_and_clone(grads, grad_thr, extent, extra_mask=extra_mask)
         self.densify_and_split(grads, grad_thr, extent, extra_mask=extra_mask)
 
@@ -889,6 +920,8 @@ class GaussianModel:
             'prune_total_count': prune_total_count,
         }
         self.tmp_radii = None
+        # Clear ADPP densify mask to avoid accidental reuse on later cycles.
+        self._adpp_densify_extra_mask = None
 
         torch.cuda.empty_cache()
     def add_densification_stats(self, viewspace_point_tensor, update_filter, radii=None, tex_values=None):
@@ -916,3 +949,121 @@ class GaussianModel:
             spark = op / (r + self.adp_eps)
             self.adp_spark_ema[idx] = (1.0 - self.adp_spark_beta) * self.adp_spark_ema[idx] + self.adp_spark_beta * spark
 
+
+    # ---------------------------------------------------------------------
+    # ADPP hooks (called from train.py, runtime-only, safe defaults)
+    # ---------------------------------------------------------------------
+    def adpp_set_action(self, action):
+        """Store the latest ADPP action dict (runtime only)."""
+        if action is None:
+            self._adpp_action = None
+        else:
+            try:
+                self._adpp_action = dict(action)
+            except Exception:
+                self._adpp_action = action
+
+    def _adpp_inside_aabb_mask(self, aabb_min, aabb_max):
+        """Return (N,) bool mask for points inside the axis-aligned bounding box."""
+        xyz = self.get_xyz
+        if xyz.numel() == 0:
+            return None
+        try:
+            amin = aabb_min.to(device=xyz.device, dtype=xyz.dtype).view(1, 3)
+            amax = aabb_max.to(device=xyz.device, dtype=xyz.dtype).view(1, 3)
+        except Exception:
+            amin = torch.tensor(aabb_min, device=xyz.device, dtype=xyz.dtype).view(1, 3)
+            amax = torch.tensor(aabb_max, device=xyz.device, dtype=xyz.dtype).view(1, 3)
+        inside = torch.logical_and(xyz >= amin, xyz <= amax).all(dim=1)
+        return inside
+
+    def adpp_pre_densify_hook(self, aabb_min, aabb_max, action=None):
+        """
+        Called right before densify_and_prune (under torch.no_grad()).
+        - Sets an internal mask to prevent densification outside the trusted AABB.
+        - Optionally decays opacity outside the AABB to suppress far-away fog/floaters.
+        """
+        if action is None:
+            action = getattr(self, "_adpp_action", None)
+        if action is None:
+            return
+        inside = self._adpp_inside_aabb_mask(aabb_min, aabb_max)
+        if inside is None:
+            return
+        # Constrain densification to trusted region (prevents 'fog growth' in empty space).
+        self._adpp_densify_extra_mask = inside.detach()
+
+        # Anti-fog: decay opacity outside trusted region (logit-space, no gradients).
+        try:
+            strength = float(action.get("anti_fog_strength", 0.0) or 0.0)
+        except Exception:
+            strength = 0.0
+        if strength <= 0.0:
+            return
+        outside = ~inside
+        if not outside.any():
+            return
+        # A modest logit shift works well and is stable across scenes.
+        # strength in [0,1] -> delta in [0, 1.5]
+        delta = max(0.0, min(1.5, 1.5 * strength))
+        try:
+            self._opacity.data[outside] = self._opacity.data[outside] - delta
+        except Exception:
+            pass
+
+    def adpp_post_densify_hook(self, aabb_min, aabb_max, action=None):
+        """
+        Called right after densify_and_prune (under torch.no_grad()).
+        - Optional hard prune of a small fraction of high-opacity points outside AABB.
+        - Decays opacity outside AABB once more (helps converge to clean geometry).
+        """
+        if action is None:
+            action = getattr(self, "_adpp_action", None)
+        if action is None:
+            return
+        inside = self._adpp_inside_aabb_mask(aabb_min, aabb_max)
+        if inside is None:
+            return
+        outside = ~inside
+        if not outside.any():
+            return
+
+        try:
+            strength = float(action.get("anti_fog_strength", 0.0) or 0.0)
+        except Exception:
+            strength = 0.0
+        try:
+            prune_frac = float(action.get("fog_prune_frac", 0.0) or 0.0)
+        except Exception:
+            prune_frac = 0.0
+        prune_frac = max(0.0, min(0.5, prune_frac))
+
+        # Optional hard prune: remove top-k most opaque points outside the trusted region.
+        if prune_frac > 0.0:
+            try:
+                outside_idx = outside.nonzero(as_tuple=False).view(-1)
+                op = self.get_opacity[outside].detach().view(-1)
+                k = int(op.numel() * prune_frac)
+                if k > 0 and outside_idx.numel() == op.numel():
+                    topk = torch.topk(op, k, largest=True).indices
+                    prune_mask = torch.zeros((self.get_xyz.shape[0],), device=self.get_xyz.device, dtype=torch.bool)
+                    prune_mask[outside_idx[topk]] = True
+                    self.prune_points(prune_mask)
+                    self._adpp_last_stats["fog_pruned"] = int(k)
+            except Exception:
+                pass
+
+        # Secondary opacity decay (even if prune_frac==0).
+        if strength > 0.0:
+            delta = max(0.0, min(1.0, 1.0 * strength))
+            try:
+                outside2 = self._adpp_inside_aabb_mask(aabb_min, aabb_max)
+                if outside2 is not None:
+                    outside2 = ~outside2
+                    if outside2.any():
+                        self._opacity.data[outside2] = self._opacity.data[outside2] - delta
+            except Exception:
+                pass
+
+        # Best-effort: keep ADPP mask cleared.
+        self._adpp_densify_extra_mask = None

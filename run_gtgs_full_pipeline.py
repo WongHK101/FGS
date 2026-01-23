@@ -419,47 +419,75 @@ def main() -> None:
     ap.add_argument("--prior_position_std_m", type=float, default=1.0)
     ap.add_argument("--wgs84_code", type=int, default=0)
 
-    # Stage 1 training defaults (RGB)
+    # ----------------------------
+    # Training preset control
+    # ----------------------------
+    ap.add_argument(
+        "--train_preset",
+        default="baseline3dgs",
+        choices=["baseline3dgs", "adpp", "manual"],
+        help=(
+            "Training preset for BOTH stages. "
+            "baseline3dgs=original 3DGS default hyperparameters (recommended baseline); "
+            "adpp=enable ADP++ self-adaptive controller on top of defaults; "
+            "manual=use the explicit hyperparameters below (paper-style / debugging)."
+        ),
+    )
+
+    # Backward-compat (older pipeline flags). If --rgb_adp_profile != off, we force train_preset=adpp.
+    ap.add_argument(
+        "--rgb_adp_profile",
+        default="off",
+        choices=["off", "default", "aggressive", "conservative"],
+        help="(Compat) If not 'off', forces --train_preset=adpp and selects a controller preset.",
+    )
+    ap.add_argument("--rgb_adp_log", action="store_true", default=False, help="(Compat) Alias of --adpp_log.")
+    ap.add_argument("--rgb_adp_plot_paper", action="store_true", default=False, help="(Compat) Alias of --adpp_plot_paper.")
+
+    # ----------------------------
+    # Common training settings
+    # ----------------------------
     ap.add_argument("--rgb_iter", type=int, default=30000)
     ap.add_argument("--rgb_res", type=int, default=1, help="Stage-1 RGB resolution divider (passed to train.py -r).")
+    ap.add_argument("--t_iter", type=int, default=40000)
+    ap.add_argument("--t_res", type=int, default=1, help="Stage-2 Thermal resolution divider (passed to train.py -r).")
+
+    # Device used by train.py for dataset tensors (passed as --data_device)
+    ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
+                    help="Device for dataset tensors in train.py (--data_device). Default: cuda")
+
+    # ----------------------------
+    # ADP++ (self-adaptive) options (used when train_preset=adpp)
+    # ----------------------------
+    ap.add_argument("--adpp_trigger", default="cycle", choices=["cycle", "continuous"], help="ADP++ trigger rule.")
+    ap.add_argument("--adpp_log", action="store_true", default=False, help="Write adp_cycle.csv/adp_iter.csv and keep TB scalars (if TB available).")
+    ap.add_argument("--adpp_log_interval", type=int, default=50, help="TensorBoard ADP log interval (iters).")
+    ap.add_argument("--adpp_iter_csv_interval", type=int, default=50, help="ADP iter CSV interval (iters).")
+    ap.add_argument("--adpp_tex_interval", type=int, default=4, help="Update ADP texture EMA every N iters.")
+    ap.add_argument("--adpp_no_cycle_print", action="store_true", default=False, help="Disable ADP cycle console prints.")
+    ap.add_argument(
+        "--adpp_plot_paper",
+        action="store_true",
+        default=False,
+        help="After Stage-1 (RGB) training, run tools/plot_adp_paper_fig.py to export paper-ready plots.",
+    )
+
+    # ----------------------------
+    # Manual hyperparameters (used when train_preset=manual)
+    # ----------------------------
+    # Stage-1 (RGB) manual params
     ap.add_argument("--rgb_densify_from", type=int, default=1500)
     ap.add_argument("--rgb_densify_until", type=int, default=10000)
     ap.add_argument("--rgb_densify_interval", type=int, default=300)
     ap.add_argument("--rgb_densify_grad", type=float, default=0.001)
     ap.add_argument("--rgb_lambda_dssim", type=float, default=0.3)
 
-    # --- ADP-Texture (Stage-1 RGB) options (requires modified train.py + scene/gaussian_model.py) ---
-    ap.add_argument(
-        "--rgb_adp_profile",
-        default="off",
-        choices=["off", "default", "aggressive", "conservative"],
-        help="Enable ADP-Texture for Stage-1 RGB training. Use 'off' for baseline.",
-    )
-    ap.add_argument(
-        "--rgb_adp_log",
-        action="store_true",
-        default=False,
-        help="If set, enable ADP CSV logging (adp_cycle.csv + adp_iter.csv) and keep TensorBoard scalars (adp/*).",
-    )
-    ap.add_argument("--rgb_adp_log_interval", type=int, default=50, help="TensorBoard ADP log interval (iters).")
-    ap.add_argument("--rgb_adp_iter_csv_interval", type=int, default=50, help="ADP iter CSV interval (iters).")
-    ap.add_argument("--rgb_adp_tex_interval", type=int, default=4, help="Update ADP texture EMA every N iters.")
-    ap.add_argument("--rgb_adp_no_cycle_print", action="store_true", default=False, help="Disable ADP cycle console prints.")
-    ap.add_argument(
-        "--rgb_adp_plot_paper",
-        action="store_true",
-        default=False,
-        help="After RGB training, run tools/plot_adp_paper_fig.py to export paper-ready PNG/PDF plots.",
-    )
-    ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-
-    # Stage 2 training defaults (Thermal)
-    ap.add_argument("--t_iter", type=int, default=40000)
-    ap.add_argument("--t_res", type=int, default=1, help="Stage-2 Thermal resolution divider (passed to train.py -r).")
+    # Stage-2 (Thermal) manual params (your previous geometry-locked recipe)
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
     ap.add_argument("--t_lambda_dssim", type=float, default=0.05)
 
     # Blend defaults
+
     ap.add_argument("--alphas", default="0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1")
     ap.add_argument("--methods", nargs="+", default=[
         "sh_only", "sh_opacity", "sh_opacity_scale", "sh_opacity_geom",
@@ -662,6 +690,30 @@ def main() -> None:
     ensure_dir(model_rgb)
     ckpt_rgb = model_rgb / f"chkpnt{args.rgb_iter}.pth"
 
+    train1_preset = args.train_preset
+    # compat: old flag forces ADPP
+    adpp_profile = "default"
+    if args.rgb_adp_profile != "off":
+        train1_preset = "adpp"
+        adpp_profile = args.rgb_adp_profile
+    if args.rgb_adp_log:
+        args.adpp_log = True
+    if args.rgb_adp_plot_paper:
+        args.adpp_plot_paper = True
+
+    if train1_preset == "baseline3dgs":
+        eprint("[INFO] Train preset: baseline3dgs (original 3DGS defaults)")
+
+    elif train1_preset == "manual":
+        eprint("[INFO] Train preset: manual (explicit hyperparameters)")
+
+    elif train1_preset == "adpp":
+        eprint(f"[INFO] Train preset: adpp (self-adaptive), profile={adpp_profile}, trigger={args.adpp_trigger}")
+
+    else:
+        raise ValueError(f"Unknown train_preset: {train1_preset}")
+
+    # Base cmd (always minimal; preset decides extra flags)
     train1_cmd = [
         py, "train.py",
         "-s", str(data_root),
@@ -672,39 +724,45 @@ def main() -> None:
         "--checkpoint_iterations", str(args.rgb_iter),
         "--data_device", str(args.device),
         "--eval",
-        "--densify_from_iter", str(args.rgb_densify_from),
-        "--densify_until_iter", str(args.rgb_densify_until),
-        "--densification_interval", str(args.rgb_densify_interval),
-        "--densify_grad_threshold", str(args.rgb_densify_grad),
-        "--lambda_dssim", str(args.rgb_lambda_dssim),
     ]
 
-    # --- ADP-Texture for Stage-1 RGB (optional) ---
-    if args.rgb_adp_profile != "off":
+    # Manual hyperparameters (paper-style / your previous tuned recipe)
+    if train1_preset == "manual":
+        train1_cmd += [
+            "--densify_from_iter", str(args.rgb_densify_from),
+            "--densify_until_iter", str(args.rgb_densify_until),
+            "--densification_interval", str(args.rgb_densify_interval),
+            "--densify_grad_threshold", str(args.rgb_densify_grad),
+            "--lambda_dssim", str(args.rgb_lambda_dssim),
+        ]
+
+    # ADP++ controller (applies to BOTH stages; Stage-1 enabled here)
+    if train1_preset == "adpp":
         train1_cmd += [
             "--adp_enabled",
-            "--adp_tex_interval", str(args.rgb_adp_tex_interval),
-            "--adp_log_interval", str(args.rgb_adp_log_interval),
+            "--adpp_trigger", str(args.adpp_trigger),
+            "--adp_tex_interval", str(args.adpp_tex_interval),
+            "--adp_log_interval", str(args.adpp_log_interval),
         ]
-        if args.rgb_adp_no_cycle_print:
+        if args.adpp_no_cycle_print:
             train1_cmd.append("--adp_no_cycle_print")
 
-        if args.rgb_adp_log:
+        if args.adpp_log:
             train1_cmd += [
                 "--adp_csv_log",
                 "--adp_iter_csv_log",
-                "--adp_iter_csv_interval", str(args.rgb_adp_iter_csv_interval),
+                "--adp_iter_csv_interval", str(args.adpp_iter_csv_interval),
             ]
 
-        # Profile presets
-        if args.rgb_adp_profile == "aggressive":
+        # Preset knobs (paper-friendly). You can still override by editing train.py flags.
+        if adpp_profile == "aggressive":
             train1_cmd += [
                 "--adp_bad_streak_kill", "2",
                 "--adp_q_tex_gate_init", "0.70", "--adp_q_tex_gate_final", "0.90",
                 "--adp_q_tex_prune_init", "0.25", "--adp_q_tex_prune_final", "0.45",
                 "--adp_q_spark", "0.90",
             ]
-        elif args.rgb_adp_profile == "conservative":
+        elif adpp_profile == "conservative":
             train1_cmd += [
                 "--adp_bad_streak_kill", "4",
                 "--adp_q_tex_gate_init", "0.50", "--adp_q_tex_gate_final", "0.75",
@@ -713,7 +771,6 @@ def main() -> None:
             ]
 
     train1_outputs_ok = ckpt_rgb.exists()
-
     if not _in_step_range(5):
         eprint("[SKIP] 05_train_rgb (outside selected step range)")
     elif not should_skip_step(state_dir, "05_train_rgb", train1_cmd, outputs_ok=train1_outputs_ok, force=args.force):
@@ -723,11 +780,12 @@ def main() -> None:
             raise FileNotFoundError(f"RGB checkpoint not found after training: {ckpt_rgb}")
         write_marker(marker_path(state_dir, "05_train_rgb"), "05_train_rgb", train1_cmd, cwd=gs_root)
 
-    # Optional: generate paper-ready ADP plots for RGB stage
-    if _in_step_range(5) and args.rgb_adp_profile != "off" and args.rgb_adp_plot_paper:
+    # Optional: generate paper-ready ADP plots for RGB stage (even on resumed runs)
+    if _in_step_range(5) and train1_preset == "adpp" and args.adpp_plot_paper:
         plot_script = gs_root / "tools" / "plot_adp_paper_fig.py"
         plot_out_dir = model_rgb / "adp_plots_paper"
-        plot_outputs_ok = plot_out_dir.exists() and dir_has_any_suffix_recursive(plot_out_dir, (".png", ".pdf"))
+        # robust check: any png/pdf in plot_out_dir
+        plot_outputs_ok = plot_out_dir.exists() and any(p.suffix.lower() in (".png", ".pdf") for p in plot_out_dir.rglob("*"))
         plot_cmd = [py, str(plot_script), "--log_dir", str(model_rgb)]
         if plot_script.exists():
             if not should_skip_step(state_dir, "05b_plot_adp_rgb", plot_cmd, outputs_ok=plot_outputs_ok, force=args.force):
@@ -819,6 +877,7 @@ def main() -> None:
     if not ckpt_rgb.exists():
         raise FileNotFoundError(f"Start checkpoint not found: {ckpt_rgb}")
 
+    # Base cmd (always minimal; preset decides extra flags)
     train2_cmd = [
         py, "train.py",
         "-s", str(thermal_ud),
@@ -828,26 +887,63 @@ def main() -> None:
         "-r", str(args.t_res),
         "--iterations", str(args.t_iter),
         "--checkpoint_iterations", str(args.t_iter),
-
-        # Freeze geometry-related params
-        "--position_lr_init", "0", "--position_lr_final", "0",
-        "--scaling_lr", "0", "--rotation_lr", "0",
-        "--opacity_lr", "0",
-
-        "--feature_lr", str(args.t_feature_lr),
-
-        # Disable densification & opacity resets
-        "--densify_from_iter", "999999",
-        "--densify_until_iter", "0",
-        "--densification_interval", "999999",
-        "--opacity_reset_interval", "999999",
-
-        "--lambda_dssim", str(args.t_lambda_dssim),
+        "--data_device", str(args.device),
         "--eval",
     ]
 
+    # Manual hyperparameters for Stage-2 (geometry lock + no densification)
+    if train1_preset == "manual":
+        train2_cmd += [
+            # Freeze geometry-related params
+            "--position_lr_init", "0", "--position_lr_final", "0",
+            "--scaling_lr", "0", "--rotation_lr", "0",
+            "--opacity_lr", "0",
+            "--feature_lr", str(args.t_feature_lr),
+
+            # Disable densification & opacity resets
+            "--densify_from_iter", "999999",
+            "--densify_until_iter", "0",
+            "--densification_interval", "999999",
+            "--opacity_reset_interval", "999999",
+
+            "--lambda_dssim", str(args.t_lambda_dssim),
+        ]
+
+    # ADP++ controller also enabled for Stage-2 (Thermal)
+    if train1_preset == "adpp":
+        train2_cmd += [
+            "--adp_enabled",
+            "--adpp_trigger", str(args.adpp_trigger),
+            "--adp_tex_interval", str(args.adpp_tex_interval),
+            "--adp_log_interval", str(args.adpp_log_interval),
+        ]
+        if args.adpp_no_cycle_print:
+            train2_cmd.append("--adp_no_cycle_print")
+        if args.adpp_log:
+            train2_cmd += [
+                "--adp_csv_log",
+                "--adp_iter_csv_log",
+                "--adp_iter_csv_interval", str(args.adpp_iter_csv_interval),
+            ]
+        # reuse the same profile knobs
+        if adpp_profile == "aggressive":
+            train2_cmd += [
+                "--adp_bad_streak_kill", "2",
+                "--adp_q_tex_gate_init", "0.70", "--adp_q_tex_gate_final", "0.90",
+                "--adp_q_tex_prune_init", "0.25", "--adp_q_tex_prune_final", "0.45",
+                "--adp_q_spark", "0.90",
+            ]
+        elif adpp_profile == "conservative":
+            train2_cmd += [
+                "--adp_bad_streak_kill", "4",
+                "--adp_q_tex_gate_init", "0.50", "--adp_q_tex_gate_final", "0.75",
+                "--adp_q_tex_prune_init", "0.15", "--adp_q_tex_prune_final", "0.25",
+                "--adp_q_spark", "0.97",
+            ]
+
     train2_outputs_ok = ckpt_t.exists()
 
+    # Preflight: step 10 requires stage-1 checkpoint and thermal_UD dataset
     if _in_step_range(10):
         if not ckpt_rgb.exists():
             raise FileNotFoundError(

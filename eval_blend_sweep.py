@@ -12,7 +12,7 @@ Evaluate a sweep of blended 3DGS models laid out as:
 
 It produces TWO evaluation sets:
   1) render_ref: compare each blend render against RGB-render (structure) and T-render (thermal scalar)
-  2) gt_ref    : compare each blend render against RGB-GT (and optionally T-GT if provided)
+  2) gt_ref    : compare each blend render against RGB-GT, and also Thermal-GT (scalar-aligned) when available
 
 It can also auto-render missing renders by calling render.py.
 """
@@ -1019,6 +1019,90 @@ def eval_vs_gt(
     if lp:
         out["LPIPS"] = float(np.mean(lp))
     return out
+def eval_vs_tgt_scalar(
+    method_renders: Path,
+    t_gt_dir: Path,
+    thermal_mode: str,
+    thermal_align: str,
+    sample_names: Optional[List[str]] = None,
+) -> Dict[str, float]:
+    """
+    Compare method renders against Thermal GT images (T_GT).
+
+    We extract a scalar thermal map S from BOTH images using `thermal_scalar(...)`,
+    then optionally align the predicted scalar to GT scalar (global alignment),
+    and report monotonic/structure metrics.
+
+    Metrics (higher is better unless noted):
+      - t_gt_Spearman_S : Spearman correlation on raw scalars (after alignment) (↑)
+      - t_gt_SSIM_S     : SSIM on normalized scalars (↑)
+      - t_gt_MI_S       : Mutual Information on raw scalars (↑)
+      - t_gt_NMI_S      : Normalized MI (↑)
+      - t_gt_PSNR_S     : PSNR on normalized scalars (after alignment) (↑)
+      - t_gt_MAE_S      : MAE on normalized scalars (after alignment) (↓)
+      - t_gt_RMSE_S     : RMSE on normalized scalars (after alignment) (↓)
+      - t_gt_EdgeCorr_S : Edge magnitude correlation on normalized scalars (↑)
+
+    If sample_names filters everything out, we fall back to all pairs to avoid NaNs.
+    """
+    if not t_gt_dir.exists():
+        return {}
+
+    pairs = pair_by_name(method_renders, t_gt_dir)
+    if not pairs:
+        return {}
+
+    if sample_names is not None:
+        sset = set(sample_names)
+        pairs_f = [(a, b) for (a, b) in pairs if a.name in sset]
+        if pairs_f:
+            pairs = pairs_f
+
+    spearman_s: List[float] = []
+    ssim_s: List[float] = []
+    mi_s: List[float] = []
+    nmi_s: List[float] = []
+    psnr_s: List[float] = []
+    mae_s: List[float] = []
+    rmse_s: List[float] = []
+    edgecorr_s: List[float] = []
+
+    for m_p, gt_p in pairs:
+        m = read_image_f32(m_p)
+        g = read_image_f32(gt_p)
+
+        ms = thermal_scalar(m, thermal_mode)
+        gs = thermal_scalar(g, thermal_mode)
+        ms_aligned = align_scalar(ms, gs, mode=thermal_align)
+
+        # normalized for scale-sensitive metrics
+        m01 = _normalize01(ms_aligned)
+        g01 = _normalize01(gs)
+
+        spearman_s.append(spearman(ms_aligned, gs))
+        ssim_s.append(ssim_gray(m01, g01))
+        mi_s.append(mutual_information(ms_aligned, gs))
+        nmi_s.append(normalized_mi(ms_aligned, gs))
+
+        psnr_s.append(psnr_gray(m01, g01))
+        diff = (m01 - g01).astype(np.float32)
+        mae_s.append(float(np.mean(np.abs(diff))))
+        rmse_s.append(float(np.sqrt(np.mean(diff * diff) + 1e-12)))
+        edgecorr_s.append(corrcoef(edge_map_y(m01), edge_map_y(g01)))
+
+    return {
+        "t_gt_Spearman_S": float(np.mean(spearman_s)),
+        "t_gt_SSIM_S": float(np.mean(ssim_s)),
+        "t_gt_MI_S": float(np.mean(mi_s)),
+        "t_gt_NMI_S": float(np.mean(nmi_s)),
+        "t_gt_PSNR_S": float(np.mean(psnr_s)),
+        "t_gt_MAE_S": float(np.mean(mae_s)),
+        "t_gt_RMSE_S": float(np.mean(rmse_s)),
+        "t_gt_EdgeCorr_S": float(np.mean(edgecorr_s)),
+    }
+
+
+
 
 def sample_frame_names(ref_dir: Path, k: int, seed: int) -> List[str]:
     imgs = list_images(ref_dir)
@@ -1411,6 +1495,14 @@ def main() -> None:
     else:
         sample_names_ref = sample_frame_names(rgb_renders, args.sample_frames, args.seed)
 
+    # - for Thermal-GT scalar metrics: sample from T GT if available
+    if t_gt.exists():
+        sample_names_tgt = sample_frame_names(t_gt, args.sample_frames, args.seed)
+        if not sample_names_tgt:
+            sample_names_tgt = sample_names_ref
+    else:
+        sample_names_tgt = sample_names_ref
+
     # evaluate
 
     rows_render_ref = []
@@ -1430,6 +1522,13 @@ def main() -> None:
             gt_dir=rgb_gt,
             sample_names=sample_names_gt,
         )
+        tr = eval_vs_tgt_scalar(
+            method_renders=m.renders_dir,  # type: ignore
+            t_gt_dir=t_gt,
+            thermal_mode=args.thermal_scalar,
+            thermal_align=args.thermal_align,
+            sample_names=sample_names_tgt,
+        ) if t_gt.exists() else {}
 
         rows_render_ref.append({
             "strategy": m.strategy,
@@ -1442,6 +1541,7 @@ def main() -> None:
             "alpha": m.alpha,
             "label": m.label,
             **{f"{k}_mean": v for k, v in gr.items()},
+            **{f"{k}_mean": v for k, v in tr.items()},
         })
 
 
@@ -1531,7 +1631,7 @@ def main() -> None:
                 if np.allclose(np.asarray(y1), np.asarray(y2), atol=1e-12, rtol=1e-12):
                     print(f"[INFO] Identical curve for metric '{metric}': {s1} == {s2} (curves overlap)")
 
-    for _m in ["rgb_ref_SSIM_Y_mean", "t_ref_Spearman_S_mean", "fusion_MI_total_mean", "fusion_QABF_mean", "PSNR_Y_mean"]:
+    for _m in ["rgb_ref_SSIM_Y_mean", "t_ref_Spearman_S_mean", "t_gt_Spearman_S_mean", "fusion_MI_total_mean", "fusion_QABF_mean", "PSNR_Y_mean"]:
         if _m in rr_cols:
             _report_identical(rr_sorted, _m)
         if _m in gt_cols:
@@ -1559,6 +1659,17 @@ def main() -> None:
         )
         print("[OK] wrote:", out_dir / "pareto_gtfidelity_vs_thermal.png")
 
+    # Pareto: RGB-GT fidelity vs Thermal-GT consistency (new, GT-aligned)
+    if "PSNR_Y_mean" in gt_cols and "t_gt_Spearman_S_mean" in gt_cols:
+        plot_lines(
+            rows=gt_sorted,
+            out_path=out_dir / "pareto_gtfidelity_vs_thermalGT.png",
+            x_key="PSNR_Y_mean",
+            y_key="t_gt_Spearman_S_mean",
+            title="Pareto: RGB-GT fidelity (PSNR_Y) vs Thermal-GT consistency (Spearman_S on thermal scalar)",
+        )
+        print("[OK] wrote:", out_dir / "pareto_gtfidelity_vs_thermalGT.png")
+
 
     # REF curves vs alpha (teacher/source referenced)
     ref_metrics = [
@@ -1581,7 +1692,8 @@ def main() -> None:
             )
             print("[OK] wrote:", out_dir / f"curve_ref_{metric}.png")
 
-# GT curves (method vs RGB-GT) vs alpha
+
+    # GT curves (method vs RGB-GT) vs alpha
     for metric in ["PSNR_mean", "SSIM_mean", "LPIPS_mean", "PSNR_Y_mean", "SSIM_Y_mean"]:
         if metric in gt_cols:
             plot_lines(
@@ -1590,6 +1702,22 @@ def main() -> None:
                 x_key="alpha",
                 y_key=metric,
                 title=f"GT metric vs alpha: {metric}",
+            )
+            print("[OK] wrote:", out_dir / f"curve_{metric}.png")
+
+    # Thermal-GT scalar curves vs alpha (new)
+    tgt_metrics = [
+        "t_gt_Spearman_S_mean", "t_gt_SSIM_S_mean", "t_gt_MI_S_mean", "t_gt_NMI_S_mean",
+        "t_gt_PSNR_S_mean", "t_gt_MAE_S_mean", "t_gt_RMSE_S_mean", "t_gt_EdgeCorr_S_mean",
+    ]
+    for metric in tgt_metrics:
+        if metric in gt_cols:
+            plot_lines(
+                rows=gt_sorted,
+                out_path=out_dir / f"curve_{metric}.png",
+                x_key="alpha",
+                y_key=metric,
+                title=f"Thermal-GT scalar metric vs alpha: {metric}",
             )
             print("[OK] wrote:", out_dir / f"curve_{metric}.png")
 

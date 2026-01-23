@@ -93,8 +93,8 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
-        self.depth_l1_weight_init = 1.0
-        self.depth_l1_weight_final = 0.01
+        self.depth_l1_weight_init = 0.0
+        self.depth_l1_weight_final = 0.0
         self.random_background = False
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")
@@ -104,15 +104,25 @@ def get_combined_args(parser : ArgumentParser):
     cfgfile_string = "Namespace()"
     args_cmdline = parser.parse_args(cmdlne_string)
 
+    cfgfilepath = None
     try:
         cfgfilepath = os.path.join(args_cmdline.model_path, "cfg_args")
+    except Exception:
+        cfgfilepath = None
+
+    if cfgfilepath:
         print("Looking for config file in", cfgfilepath)
-        with open(cfgfilepath) as cfg_file:
-            print("Config file found: {}".format(cfgfilepath))
-            cfgfile_string = cfg_file.read()
-    except TypeError:
-        print("Config file not found at")
-        pass
+        if os.path.isfile(cfgfilepath):
+            try:
+                with open(cfgfilepath, "r", encoding="utf-8") as cfg_file:
+                    print("Config file found: {}".format(cfgfilepath))
+                    cfgfile_string = cfg_file.read()
+            except (OSError, IOError) as e:
+                print("Config file exists but could not be read:", cfgfilepath, "|", e)
+        else:
+            print("Config file not found at", cfgfilepath)
+    else:
+        print("Config file path invalid (model_path missing). Proceeding with CLI args only.")
     args_cfgfile = eval(cfgfile_string)
 
     merged_dict = vars(args_cfgfile).copy()

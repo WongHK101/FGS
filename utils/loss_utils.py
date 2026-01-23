@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
+from typing import Optional
 try:
     from diff_gaussian_rasterization._C import fusedssim, fusedssim_backward
 except:
@@ -89,3 +90,327 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
 def fast_ssim(img1, img2):
     ssim_map = FusedSSIMMap.apply(C1, C2, img1, img2)
     return ssim_map.mean()
+
+# -----------------------------------------------------------------------------
+# ADP++ extensions: edge-aware / gradient-based losses (paper-grade, stable)
+# -----------------------------------------------------------------------------
+# These utilities are designed to be:
+#  - Safe: no effect on baseline unless explicitly used by train.py
+#  - Stable: robust normalization + optional masking
+#  - Dependency-free: pure PyTorch (no OpenCV)
+#
+# Typical thermal usage (single-channel):
+#   pred_t = rendered_image[:, :1, ...] or rendered_image.mean(1, keepdim=True)
+#   gt_t   = gt_image[:, :1, ...]        (already normalized to [0,1])
+#   L_edge = edge_aware_grad_loss(pred_t, gt_t, edge_quantile=0.90, edge_boost=4.0)
+#
+# If you have a valid_mask (0/1) for pixels (e.g. alpha>0):
+#   L_edge = edge_aware_grad_loss(pred_t, gt_t, valid_mask=mask)
+# -----------------------------------------------------------------------------
+
+def _to_nchw(x: torch.Tensor) -> torch.Tensor:
+    """
+    Convert an image tensor to NCHW.
+    Accepts:
+      - HxW
+      - 1xHxW / CxHxW
+      - NxHxW
+      - NxCxHxW
+    Returns: NxCxHxW
+    """
+    if x.dim() == 2:
+        return x[None, None, ...]
+    if x.dim() == 3:
+        # [C,H,W] or [N,H,W]
+        if x.shape[0] in (1, 3):
+            return x[None, ...]
+        return x[:, None, ...]
+    if x.dim() == 4:
+        return x
+    raise ValueError(f"Unsupported tensor shape: {tuple(x.shape)}")
+
+
+def _to_mask_nchw(mask: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
+    """
+    Convert mask to Nx1xHxW float mask in {0,1}, broadcastable to 'like'.
+    """
+    m = _to_nchw(mask)
+    if m.shape[1] != 1:
+        # if user passes NxCxHxW, reduce to 1 channel
+        m = m[:, :1, ...]
+    m = m.to(dtype=like.dtype, device=like.device)
+    return (m > 0.5).to(dtype=like.dtype)
+
+
+def charbonnier(x: torch.Tensor, eps: float = 1e-3) -> torch.Tensor:
+    """
+    Charbonnier penalty: sqrt(x^2 + eps^2).
+    More robust than L1 for noisy thermal.
+    """
+    return torch.sqrt(x * x + (eps * eps))
+
+
+def masked_mean(x: torch.Tensor, valid_mask: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Mean of x under mask. Mask is Nx1xHxW or broadcastable.
+    """
+    m = valid_mask
+    denom = m.sum().clamp_min(eps)
+    return (x * m).sum() / denom
+
+
+def masked_l1_loss(network_output: torch.Tensor, gt: torch.Tensor, valid_mask: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Masked L1 mean. Safe for any C.
+    """
+    x = _to_nchw(network_output)
+    y = _to_nchw(gt).to(dtype=x.dtype, device=x.device)
+    m = _to_mask_nchw(valid_mask, like=x)
+    # broadcast mask to channels
+    m = m.expand(x.shape[0], 1, x.shape[2], x.shape[3])
+    return masked_mean(torch.abs(x - y), m, eps=eps)
+
+
+def masked_l2_loss(network_output: torch.Tensor, gt: torch.Tensor, valid_mask: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Masked L2 mean. Safe for any C.
+    """
+    x = _to_nchw(network_output)
+    y = _to_nchw(gt).to(dtype=x.dtype, device=x.device)
+    m = _to_mask_nchw(valid_mask, like=x)
+    return masked_mean((x - y) ** 2, m, eps=eps)
+
+
+def _sobel_kernels(dtype: torch.dtype, device: torch.device):
+    kx = torch.tensor([[1, 0, -1],
+                       [2, 0, -2],
+                       [1, 0, -1]], dtype=dtype, device=device).view(1, 1, 3, 3)
+    ky = torch.tensor([[1,  2,  1],
+                       [0,  0,  0],
+                       [-1, -2, -1]], dtype=dtype, device=device).view(1, 1, 3, 3)
+    return kx, ky
+
+
+def image_gradients_sobel(img: torch.Tensor, eps: float = 1e-6):
+    """
+    Sobel gradients for each channel separately.
+    Args:
+        img: NxCxHxW (or broadcastable; will be converted)
+    Returns:
+        gx, gy: NxCxHxW
+    """
+    x = _to_nchw(img)
+    N, C, H, W = x.shape
+    kx, ky = _sobel_kernels(x.dtype, x.device)
+    # apply per-channel with groups
+    kx = kx.expand(C, 1, 3, 3)
+    ky = ky.expand(C, 1, 3, 3)
+    gx = F.conv2d(x, kx, padding=1, groups=C)
+    gy = F.conv2d(x, ky, padding=1, groups=C)
+    return gx, gy
+
+
+def grad_magnitude(img: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    gx, gy = image_gradients_sobel(img, eps=eps)
+    return torch.sqrt(gx * gx + gy * gy + eps)
+
+
+def _normalize_per_image(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Normalize tensor per-image and per-channel to [0,1] using min-max.
+    Works for NxCxHxW.
+    """
+    t = _to_nchw(x)
+    N, C, _, _ = t.shape
+    flat = t.view(N, C, -1)
+    t_min = flat.min(dim=-1).values.view(N, C, 1, 1)
+    t_max = flat.max(dim=-1).values.view(N, C, 1, 1)
+    return (t - t_min) / (t_max - t_min + eps)
+
+
+def gradient_consistency_loss(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    valid_mask: torch.Tensor = None,
+    robust_eps: float = 1e-3,
+    normalize: bool = True,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Penalize gradient mismatch between pred and gt (Sobel).
+    If normalize=True, compare gradients after per-image normalization to reduce exposure-scale sensitivity.
+    """
+    p = _to_nchw(pred)
+    g = _to_nchw(gt).to(dtype=p.dtype, device=p.device)
+
+    if normalize:
+        p = _normalize_per_image(p, eps=eps)
+        g = _normalize_per_image(g, eps=eps)
+
+    pgx, pgy = image_gradients_sobel(p, eps=eps)
+    ggx, ggy = image_gradients_sobel(g, eps=eps)
+
+    diff = charbonnier(pgx - ggx, eps=robust_eps) + charbonnier(pgy - ggy, eps=robust_eps)
+
+    if valid_mask is None:
+        return diff.mean()
+    m = _to_mask_nchw(valid_mask, like=p)
+    return masked_mean(diff, m, eps=eps)
+
+
+def laplacian_map(img: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Laplacian response per-channel.
+    """
+    x = _to_nchw(img)
+    N, C, H, W = x.shape
+    k = torch.tensor([[0,  1, 0],
+                      [1, -4, 1],
+                      [0,  1, 0]], dtype=x.dtype, device=x.device).view(1, 1, 3, 3)
+    k = k.expand(C, 1, 3, 3)
+    lap = F.conv2d(x, k, padding=1, groups=C)
+    return lap
+
+
+def laplacian_consistency_loss(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    valid_mask: torch.Tensor = None,
+    robust_eps: float = 1e-3,
+    normalize: bool = True,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Penalize Laplacian mismatch (captures edge crispness, reduces blur).
+    """
+    p = _to_nchw(pred)
+    g = _to_nchw(gt).to(dtype=p.dtype, device=p.device)
+
+    if normalize:
+        p = _normalize_per_image(p, eps=eps)
+        g = _normalize_per_image(g, eps=eps)
+
+    lp = laplacian_map(p, eps=eps)
+    lg = laplacian_map(g, eps=eps)
+
+    diff = charbonnier(lp - lg, eps=robust_eps)
+    if valid_mask is None:
+        return diff.mean()
+    m = _to_mask_nchw(valid_mask, like=p)
+    return masked_mean(diff, m, eps=eps)
+
+
+def edge_aware_grad_loss(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    valid_mask: Optional[torch.Tensor] = None,
+    *,
+    mask: Optional[torch.Tensor] = None,
+    sobel_scale: float = 1.0,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Edge-aware gradient loss:
+      - compute gt gradient magnitude
+      - define an edge mask by quantile threshold (stable across scenes)
+      - weight gradient mismatch more on edges
+
+    This directly addresses "soft edges" in T-model by pushing the model to match
+    GT's edge structure during Stage-2 texture/color refinement.
+
+    Returns:
+        scalar tensor
+    """
+    # Backward-compat: allow callers to pass `mask=` instead of `valid_mask=`.
+    if valid_mask is None and mask is not None:
+        valid_mask = mask
+
+    p = _to_nchw(pred)
+    g = _to_nchw(gt).to(dtype=p.dtype, device=p.device)
+
+    if normalize:
+        p = _normalize_per_image(p, eps=eps)
+        g = _normalize_per_image(g, eps=eps)
+
+    # edge mask from gt gradient magnitude
+    gmag = grad_magnitude(g, eps=eps)  # NxCxHxW
+    # reduce channels -> single edge map
+    gmag1 = gmag.mean(dim=1, keepdim=True)
+
+    # quantile threshold per-batch (use all pixels); fallback for tiny tensors
+    flat = gmag1.view(gmag1.shape[0], -1)
+    if flat.shape[1] < 16:
+        edge_mask = torch.zeros_like(gmag1)
+    else:
+        thr = torch.quantile(flat, edge_quantile, dim=1).view(-1, 1, 1, 1).clamp_min(eps)
+        edge_mask = (gmag1 >= thr).to(dtype=p.dtype)
+
+    # combine with valid mask if provided
+    if valid_mask is not None:
+        vm = _to_mask_nchw(valid_mask, like=p)
+        edge_mask = edge_mask * vm
+
+    # base gradient consistency
+    pgx, pgy = image_gradients_sobel(p, eps=eps)
+    ggx, ggy = image_gradients_sobel(g, eps=eps)
+
+    diff = charbonnier(pgx - ggx, eps=robust_eps) + charbonnier(pgy - ggy, eps=robust_eps)
+
+    # edge weighting: 1 + edge_boost on edge pixels
+    w = 1.0 + edge_boost * edge_mask
+    diff_w = diff * w
+
+    if valid_mask is None:
+        return diff_w.mean()
+
+    vm = _to_mask_nchw(valid_mask, like=p)
+    return masked_mean(diff_w, vm, eps=eps)
+
+
+def edge_aware_laplacian_loss(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    valid_mask: Optional[torch.Tensor] = None,
+    *,
+    mask: Optional[torch.Tensor] = None,
+    laplacian_scale: float = 1.0,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Edge-aware Laplacian loss (optional stronger "deblurring" pressure).
+    """
+    # Backward-compat: allow callers to pass `mask=` instead of `valid_mask=`.
+    if valid_mask is None and mask is not None:
+        valid_mask = mask
+
+    p = _to_nchw(pred)
+    g = _to_nchw(gt).to(dtype=p.dtype, device=p.device)
+
+    if normalize:
+        p = _normalize_per_image(p, eps=eps)
+        g = _normalize_per_image(g, eps=eps)
+
+    gmag = grad_magnitude(g, eps=eps).mean(dim=1, keepdim=True)
+    flat = gmag.view(gmag.shape[0], -1)
+    if flat.shape[1] < 16:
+        edge_mask = torch.zeros_like(gmag)
+    else:
+        thr = torch.quantile(flat, edge_quantile, dim=1).view(-1, 1, 1, 1).clamp_min(eps)
+        edge_mask = (gmag >= thr).to(dtype=p.dtype)
+
+    if valid_mask is not None:
+        vm = _to_mask_nchw(valid_mask, like=p)
+        edge_mask = edge_mask * vm
+
+    lp = laplacian_map(p, eps=eps)
+    lg = laplacian_map(g, eps=eps)
+
+    diff = charbonnier(lp - lg, eps=robust_eps)
+    w = 1.0 + edge_boost * edge_mask
+    diff_w = diff * w
+
+    if valid_mask is None:
+        return diff_w.mean()
+
+    vm = _to_mask_nchw(valid_mask, like=p)
+    return masked_mean(diff_w, vm, eps=eps)
