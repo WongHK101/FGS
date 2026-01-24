@@ -61,7 +61,7 @@ try:
         from utils.adpp_controller import ADPPController, ADPPConfig  # type: ignore
         from utils.adpp_signals import edge_score_grad_ncc, fog_score_outside_aabb  # type: ignore
     except Exception:
-        from adpp_controller import ADPPController, ADPPConfig  # type: ignore
+        from utils.adpp_controller import ADPPController, ADPPConfig  # type: ignore
         from adpp_signals import edge_score_grad_ncc, fog_score_outside_aabb  # type: ignore
     _HAS_ADPP = True
 except Exception:
@@ -161,6 +161,17 @@ def training(dataset, opt, pipe, test_iterations, save_iterations, checkpoint_it
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+    # --- ADPP/compat: when resuming from a checkpoint, ensure requested exports exist ---
+    if checkpoint is not None:
+        try:
+            if first_iter in set(save_iterations):
+                pc_dir = os.path.join(scene.model_path, "point_cloud", f"iteration_{first_iter}")
+                if not os.path.isdir(pc_dir):
+                    print(f"[ITER {first_iter}] Saving Gaussians (resume export)")
+                    scene.save(first_iter)
+        except Exception as _e:
+            print(f"[WARN] Failed to export point_cloud for resume checkpoint at iter {first_iter}: {_e}")
+
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -702,5 +713,15 @@ if __name__ == "__main__":
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(dataset, opt, pipe, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+
+    # --- ADPP/compat: always export final point_cloud for downstream render/metrics ---
+    try:
+        final_iter = opt.iterations
+        pc_dir = os.path.join(scene.model_path, "point_cloud", f"iteration_{final_iter}")
+        if not os.path.isdir(pc_dir):
+            print(f"[ITER {final_iter}] Saving Gaussians (final export)")
+            scene.save(final_iter)
+    except Exception as _e:
+        print(f"[WARN] Failed to export final point_cloud at iter {final_iter}: {_e}")
 
     print("\nTraining complete.")

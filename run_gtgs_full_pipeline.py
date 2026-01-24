@@ -472,6 +472,53 @@ def main() -> None:
         help="After Stage-1 (RGB) training, run tools/plot_adp_paper_fig.py to export paper-ready plots.",
     )
 
+
+    ap.add_argument(
+        "--adpp_max_edge_loss_weight",
+        type=float,
+        default=None,
+        help="Override ADPP edge-loss cap (0 disables edge loss).",
+    )
+    ap.add_argument(
+        "--adpp_edge_grad_weight",
+        type=float,
+        default=None,
+        help="Override ADPP edge gradient loss weight.",
+    )
+    ap.add_argument(
+        "--adpp_edge_lap_weight",
+        type=float,
+        default=None,
+        help="Override ADPP edge Laplacian loss weight.",
+    )
+    ap.add_argument(
+        "--adpp_disable_edge_loss",
+        action="store_true",
+        help="Convenience switch: set all ADPP edge-loss weights to 0 (thermal edge loss off).",
+    )
+
+    # ----------------------------
+    # ADPP advanced knobs (optional overrides; forwarded to train.py)
+    # ----------------------------
+    ap.add_argument("--adpp_q_fog_init", type=float, default=None,
+                   help="ADPP 雾气/漂浮( fog )门控阈值初始值（可选）。")
+    ap.add_argument("--adpp_q_fog_final", type=float, default=None,
+                   help="ADPP 雾气/漂浮( fog )门控阈值最终值（可选）。")
+    ap.add_argument("--adpp_aabb_margin", type=float, default=None,
+                   help="ADPP fog 剪枝用的 AABB margin（可选）。")
+    ap.add_argument("--adpp_fog_interval", type=int, default=None,
+                   help="ADPP fog 评分/处理的间隔迭代数（可选）。")
+    ap.add_argument("--adpp_anti_fog_strength_max", type=float, default=None,
+                   help="ADPP anti-fog 强度上限（设为 0 可关闭 anti-fog）。")
+    ap.add_argument("--adpp_fog_prune_frac_max", type=float, default=None,
+                   help="ADPP fog 剪枝比例上限（设为 0 可关闭 fog prune）。")
+    ap.add_argument("--adpp_densify_interval_mult_max", type=float, default=None,
+                   help="ADPP densify_interval 的最大倍率（可选）。")
+    ap.add_argument("--adpp_densify_grad_thr_mult_max", type=float, default=None,
+                   help="ADPP densify_grad_threshold 的最大倍率（可选）。")
+    ap.add_argument("--adpp_loss_spike_factor", type=float, default=None,
+                   help="ADPP loss spike 因子（可选；用于异常/退化触发）。")
+
     # ----------------------------
     # Manual hyperparameters (used when train_preset=manual)
     # ----------------------------
@@ -722,6 +769,8 @@ def main() -> None:
         "-r", str(args.rgb_res),
         "--iterations", str(args.rgb_iter),
         "--checkpoint_iterations", str(args.rgb_iter),
+        "--save_iterations", "7000", str(args.rgb_iter),
+        "--test_iterations", "7000", str(args.rgb_iter),
         "--data_device", str(args.device),
         "--eval",
     ]
@@ -753,6 +802,37 @@ def main() -> None:
                 "--adp_iter_csv_log",
                 "--adp_iter_csv_interval", str(args.adpp_iter_csv_interval),
             ]
+
+        # Optional: override / disable thermal edge loss (used by ADPP thermal stage).
+        if getattr(args, "adpp_disable_edge_loss", False):
+            train1_cmd += [
+                "--adpp_max_edge_loss_weight", "0",
+                "--adpp_edge_grad_weight", "0",
+                "--adpp_edge_lap_weight", "0",
+            ]
+        else:
+            if args.adpp_max_edge_loss_weight is not None:
+                train1_cmd += ["--adpp_max_edge_loss_weight", str(args.adpp_max_edge_loss_weight)]
+            if args.adpp_edge_grad_weight is not None:
+                train1_cmd += ["--adpp_edge_grad_weight", str(args.adpp_edge_grad_weight)]
+            if args.adpp_edge_lap_weight is not None:
+                train1_cmd += ["--adpp_edge_lap_weight", str(args.adpp_edge_lap_weight)]
+
+
+        # Optional ADPP overrides (forward to train.py if provided)
+        for _k, _v in [
+            ("adpp_q_fog_init", args.adpp_q_fog_init),
+            ("adpp_q_fog_final", args.adpp_q_fog_final),
+            ("adpp_aabb_margin", args.adpp_aabb_margin),
+            ("adpp_fog_interval", args.adpp_fog_interval),
+            ("adpp_anti_fog_strength_max", args.adpp_anti_fog_strength_max),
+            ("adpp_fog_prune_frac_max", args.adpp_fog_prune_frac_max),
+            ("adpp_densify_interval_mult_max", args.adpp_densify_interval_mult_max),
+            ("adpp_densify_grad_thr_mult_max", args.adpp_densify_grad_thr_mult_max),
+            ("adpp_loss_spike_factor", args.adpp_loss_spike_factor),
+        ]:
+            if _v is not None:
+                train1_cmd += [f"--{_k}", str(_v)]
 
         # Preset knobs (paper-friendly). You can still override by editing train.py flags.
         if adpp_profile == "aggressive":
@@ -887,6 +967,8 @@ def main() -> None:
         "-r", str(args.t_res),
         "--iterations", str(args.t_iter),
         "--checkpoint_iterations", str(args.t_iter),
+        "--save_iterations", str(args.t_iter),
+        "--test_iterations", str(args.t_iter),
         "--data_device", str(args.device),
         "--eval",
     ]
@@ -925,6 +1007,37 @@ def main() -> None:
                 "--adp_iter_csv_log",
                 "--adp_iter_csv_interval", str(args.adpp_iter_csv_interval),
             ]
+
+        # Optional: override / disable thermal edge loss (used by ADPP thermal stage).
+        if getattr(args, "adpp_disable_edge_loss", False):
+            train2_cmd += [
+                "--adpp_max_edge_loss_weight", "0",
+                "--adpp_edge_grad_weight", "0",
+                "--adpp_edge_lap_weight", "0",
+            ]
+        else:
+            if args.adpp_max_edge_loss_weight is not None:
+                train2_cmd += ["--adpp_max_edge_loss_weight", str(args.adpp_max_edge_loss_weight)]
+            if args.adpp_edge_grad_weight is not None:
+                train2_cmd += ["--adpp_edge_grad_weight", str(args.adpp_edge_grad_weight)]
+            if args.adpp_edge_lap_weight is not None:
+                train2_cmd += ["--adpp_edge_lap_weight", str(args.adpp_edge_lap_weight)]
+
+        # Optional ADPP overrides (forward to train.py if provided)
+        for _k, _v in [
+            ("adpp_q_fog_init", args.adpp_q_fog_init),
+            ("adpp_q_fog_final", args.adpp_q_fog_final),
+            ("adpp_aabb_margin", args.adpp_aabb_margin),
+            ("adpp_fog_interval", args.adpp_fog_interval),
+            ("adpp_anti_fog_strength_max", args.adpp_anti_fog_strength_max),
+            ("adpp_fog_prune_frac_max", args.adpp_fog_prune_frac_max),
+            ("adpp_densify_interval_mult_max", args.adpp_densify_interval_mult_max),
+            ("adpp_densify_grad_thr_mult_max", args.adpp_densify_grad_thr_mult_max),
+            ("adpp_loss_spike_factor", args.adpp_loss_spike_factor),
+        ]:
+            if _v is not None:
+                train2_cmd += [f"--{_k}", str(_v)]
+
         # reuse the same profile knobs
         if adpp_profile == "aggressive":
             train2_cmd += [
@@ -1019,6 +1132,29 @@ def main() -> None:
     if _in_step_range(13):
         rgb_ply = model_rgb / "point_cloud" / f"iteration_{args.rgb_iter}" / "point_cloud.ply"
         t_ply = model_t / "point_cloud" / f"iteration_{args.t_iter}" / "point_cloud.ply"
+
+    # If the requested thermal iteration point cloud is missing, fall back to the latest available iteration.
+    if not t_ply.exists():
+        pc_dir = model_t / "point_cloud"
+        if pc_dir.exists():
+            try:
+                its = []
+                for d in pc_dir.iterdir():
+                    if d.is_dir() and d.name.startswith("iteration_"):
+                        try:
+                            its.append(int(d.name.split("_")[-1]))
+                        except Exception:
+                            pass
+                if its:
+                    best_it = max(its)
+                    alt = pc_dir / f"iteration_{best_it}" / "point_cloud.ply"
+                    if alt.exists():
+                        print(f"[WARN] Requested thermal point cloud at iter {args.t_iter} missing; using iter {best_it} instead.")
+                        args.t_iter = best_it
+                        t_ply = alt
+            except Exception:
+                pass
+
         if not rgb_ply.exists():
             raise FileNotFoundError(
                 f"RGB point cloud missing for blend: {rgb_ply}\n"
