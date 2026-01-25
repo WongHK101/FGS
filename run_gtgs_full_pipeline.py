@@ -455,6 +455,7 @@ def main() -> None:
     # Device used by train.py for dataset tensors (passed as --data_device)
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                     help="Device for dataset tensors in train.py (--data_device). Default: cuda")
+    ap.add_argument("--data_device", dest="device", choices=["cuda", "cpu"], help="--device 的别名（转发到 train.py 的 --data_device）。")
 
     # ----------------------------
     # ADP++ (self-adaptive) options (used when train_preset=adpp)
@@ -498,28 +499,6 @@ def main() -> None:
     )
 
     # ----------------------------
-    # ADPP advanced knobs (optional overrides; forwarded to train.py)
-    # ----------------------------
-    ap.add_argument("--adpp_q_fog_init", type=float, default=None,
-                   help="ADPP 雾气/漂浮( fog )门控阈值初始值（可选）。")
-    ap.add_argument("--adpp_q_fog_final", type=float, default=None,
-                   help="ADPP 雾气/漂浮( fog )门控阈值最终值（可选）。")
-    ap.add_argument("--adpp_aabb_margin", type=float, default=None,
-                   help="ADPP fog 剪枝用的 AABB margin（可选）。")
-    ap.add_argument("--adpp_fog_interval", type=int, default=None,
-                   help="ADPP fog 评分/处理的间隔迭代数（可选）。")
-    ap.add_argument("--adpp_anti_fog_strength_max", type=float, default=None,
-                   help="ADPP anti-fog 强度上限（设为 0 可关闭 anti-fog）。")
-    ap.add_argument("--adpp_fog_prune_frac_max", type=float, default=None,
-                   help="ADPP fog 剪枝比例上限（设为 0 可关闭 fog prune）。")
-    ap.add_argument("--adpp_densify_interval_mult_max", type=float, default=None,
-                   help="ADPP densify_interval 的最大倍率（可选）。")
-    ap.add_argument("--adpp_densify_grad_thr_mult_max", type=float, default=None,
-                   help="ADPP densify_grad_threshold 的最大倍率（可选）。")
-    ap.add_argument("--adpp_loss_spike_factor", type=float, default=None,
-                   help="ADPP loss spike 因子（可选；用于异常/退化触发）。")
-
-    # ----------------------------
     # Manual hyperparameters (used when train_preset=manual)
     # ----------------------------
     # Stage-1 (RGB) manual params
@@ -559,7 +538,7 @@ def main() -> None:
     ap.add_argument("--no_auto_render", dest="auto_render", action="store_false",
                     help="Disable auto-render during eval sweep.")
 
-    args = ap.parse_args()
+    args, train_extra_args = ap.parse_known_args()
 
     # Validate step range
     if args.from_step < 1 or args.to_step > 14 or args.from_step > args.to_step:
@@ -819,21 +798,6 @@ def main() -> None:
                 train1_cmd += ["--adpp_edge_lap_weight", str(args.adpp_edge_lap_weight)]
 
 
-        # Optional ADPP overrides (forward to train.py if provided)
-        for _k, _v in [
-            ("adpp_q_fog_init", args.adpp_q_fog_init),
-            ("adpp_q_fog_final", args.adpp_q_fog_final),
-            ("adpp_aabb_margin", args.adpp_aabb_margin),
-            ("adpp_fog_interval", args.adpp_fog_interval),
-            ("adpp_anti_fog_strength_max", args.adpp_anti_fog_strength_max),
-            ("adpp_fog_prune_frac_max", args.adpp_fog_prune_frac_max),
-            ("adpp_densify_interval_mult_max", args.adpp_densify_interval_mult_max),
-            ("adpp_densify_grad_thr_mult_max", args.adpp_densify_grad_thr_mult_max),
-            ("adpp_loss_spike_factor", args.adpp_loss_spike_factor),
-        ]:
-            if _v is not None:
-                train1_cmd += [f"--{_k}", str(_v)]
-
         # Preset knobs (paper-friendly). You can still override by editing train.py flags.
         if adpp_profile == "aggressive":
             train1_cmd += [
@@ -854,6 +818,10 @@ def main() -> None:
     if not _in_step_range(5):
         eprint("[SKIP] 05_train_rgb (outside selected step range)")
     elif not should_skip_step(state_dir, "05_train_rgb", train1_cmd, outputs_ok=train1_outputs_ok, force=args.force):
+        # Forward any extra (unknown-to-pipeline) args to 3DGS train.py for compatibility.
+        # Example: --white_background, --random_background, --optimizer_type, --position_lr_init, --data_device cpu, etc.
+        if train_extra_args:
+            train1_cmd += train_extra_args
         maybe_run(train1_cmd, cwd=gs_root)
         train1_outputs_ok = ckpt_rgb.exists()
         if not train1_outputs_ok:
@@ -1023,21 +991,6 @@ def main() -> None:
             if args.adpp_edge_lap_weight is not None:
                 train2_cmd += ["--adpp_edge_lap_weight", str(args.adpp_edge_lap_weight)]
 
-        # Optional ADPP overrides (forward to train.py if provided)
-        for _k, _v in [
-            ("adpp_q_fog_init", args.adpp_q_fog_init),
-            ("adpp_q_fog_final", args.adpp_q_fog_final),
-            ("adpp_aabb_margin", args.adpp_aabb_margin),
-            ("adpp_fog_interval", args.adpp_fog_interval),
-            ("adpp_anti_fog_strength_max", args.adpp_anti_fog_strength_max),
-            ("adpp_fog_prune_frac_max", args.adpp_fog_prune_frac_max),
-            ("adpp_densify_interval_mult_max", args.adpp_densify_interval_mult_max),
-            ("adpp_densify_grad_thr_mult_max", args.adpp_densify_grad_thr_mult_max),
-            ("adpp_loss_spike_factor", args.adpp_loss_spike_factor),
-        ]:
-            if _v is not None:
-                train2_cmd += [f"--{_k}", str(_v)]
-
         # reuse the same profile knobs
         if adpp_profile == "aggressive":
             train2_cmd += [
@@ -1069,6 +1022,9 @@ def main() -> None:
     if not _in_step_range(10):
         eprint("[SKIP] 10_train_thermal (outside selected step range)")
     elif not should_skip_step(state_dir, "10_train_thermal", train2_cmd, outputs_ok=train2_outputs_ok, force=args.force):
+        # Forward any extra (unknown-to-pipeline) args to 3DGS train.py for compatibility.
+        if train_extra_args:
+            train2_cmd += train_extra_args
         maybe_run(train2_cmd, cwd=gs_root)
         train2_outputs_ok = ckpt_t.exists()
         if not train2_outputs_ok:
