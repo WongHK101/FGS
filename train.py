@@ -57,75 +57,68 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
 
+
     # Optional: sparse support gating for densification (disabled by default).
+    # NOTE: When enabled, the index is built and pinned to the model device once
+    # before training starts. There must be no CPU/Numpy fallback in the densify hot-path.
     if ss_args is not None and getattr(ss_args, "ss_enable", False):
         try:
-            support_xyz = None
+            from utils import sparse_support as _ss
+            from scene.colmap_loader import load_colmap_sparse_xyz as _load_colmap_sparse_xyz
+
+            dev = gaussians.get_xyz.device
+
+            support_t = None
             src_used = None
-            _ss = None
 
             # 1) Prefer COLMAP sparse points (if requested).
             if getattr(ss_args, "ss_source", "colmap_sparse") == "colmap_sparse":
-                try:
-                    from utils import sparse_support as _ss
-                    model_dir = _ss.resolve_colmap_model_dir(os.path.join(dataset.source_path, "sparse"))
-                    spc = _ss.load_colmap_points3D(model_dir)
-                    if spc is not None and getattr(spc, "xyz", None) is not None and spc.xyz.shape[0] > 0:
-                        support_xyz = spc.xyz
-                        src_used = "colmap_sparse"
-                except Exception:
-                    support_xyz = None
+                model_dir = _ss.resolve_colmap_model_dir(os.path.join(dataset.source_path, "sparse"))
+                xyz_np = _load_colmap_sparse_xyz(model_dir)
+                if xyz_np is not None and getattr(xyz_np, "shape", None) is not None and xyz_np.shape[0] > 0:
+                    # Build support tensor directly on the same device as gaussians.
+                    support_t = torch.tensor(xyz_np, dtype=torch.float32, device=dev)
+                    src_used = "colmap_sparse"
 
-            # 2) Fallback: initial gaussian point cloud.
-            if support_xyz is None or (hasattr(support_xyz, "shape") and support_xyz.shape[0] == 0):
-                try:
-                    support_xyz = gaussians.get_xyz.detach().cpu().numpy()
-                    src_used = "init_pcd"
-                except Exception:
-                    support_xyz = None
+            # 2) Fallback: initial gaussian point cloud (already on dev).
+            if support_t is None or support_t.numel() == 0:
+                support_t = gaussians.get_xyz.detach()
+                src_used = "init_pcd"
 
-            # 3) Guard: empty support => disable.
-            if support_xyz is None or (hasattr(support_xyz, "shape") and support_xyz.shape[0] == 0):
-                print("[WARN] SparseSupport enabled but support points are empty; disabling sparse support.")
+            # 3) Guard: empty/invalid support => disable.
+            if support_t is None or support_t.ndim != 2 or support_t.shape[-1] != 3 or support_t.shape[0] == 0:
+                print("[WARN] SparseSupport enabled but support points are empty/invalid; disabling sparse support.")
             else:
                 # AABB (+ optional margin)
-                sup_cpu = torch.as_tensor(support_xyz, dtype=torch.float32, device="cpu")
-                if sup_cpu.ndim != 2 or sup_cpu.shape[1] != 3 or sup_cpu.shape[0] == 0:
-                    print("[WARN] SparseSupport enabled but support points have invalid shape; disabling sparse support.")
-                else:
-                    lo = sup_cpu.min(dim=0).values
-                    hi = sup_cpu.max(dim=0).values
-                    margin = float(getattr(ss_args, "ss_aabb_margin", 0.0) or 0.0)
-                    if margin != 0.0:
-                        lo = lo - margin
-                        hi = hi + margin
+                margin = float(getattr(ss_args, "ss_aabb_margin", 0.0) or 0.0)
+                lo = support_t.min(dim=0).values
+                hi = support_t.max(dim=0).values
+                if margin != 0.0:
+                    lo = lo - margin
+                    hi = hi + margin
 
-                    # Optional voxel index for NN queries.
-                    vhnn = None
-                    voxel = getattr(ss_args, "ss_voxel_size", None)
-                    if voxel is not None:
-                        try:
-                            if _ss is None:
-                                from utils import sparse_support as _ss
-                            vhnn = _ss.VoxelHashNN(support_xyz, voxel_size=float(voxel))
-                        except Exception:
-                            vhnn = None
+                voxel = getattr(ss_args, "ss_voxel_size", None)
+                nn_thr = getattr(ss_args, "ss_nn_dist_thr", None)
+                vhnn = None
 
-                    nn_thr = getattr(ss_args, "ss_nn_dist_thr", None)
-                    dev = gaussians.get_xyz.device
-                    gaussians.set_sparse_support(
-                        aabb=(lo.to(dev), hi.to(dev)),
-                        index=vhnn,
-                        nn_dist_thr=nn_thr,
-                    )
-                    print(
-                        f"[INFO] SparseSupport enabled: source={src_used}, margin={margin}, "
-                        f"voxel={voxel}, nn_thr={nn_thr}"
-                    )
+                # If user requests NN gating but no voxel index can be built, gracefully ignore NN gating.
+                if nn_thr is not None and voxel is None:
+                    print("[WARN] SparseSupport: ss_nn_dist_thr set but ss_voxel_size is None; ignoring nn_dist_thr (AABB-only).")
+                    nn_thr = None
+
+                if voxel is not None:
+                    # Build index on the model device; GaussianModel will cache/pin it once.
+                    vhnn = _ss.VoxelHashNN(support_t, voxel_size=float(voxel))
+
+                gaussians.set_sparse_support(
+                    aabb=(lo, hi),
+                    index=vhnn,
+                    nn_dist_thr=nn_thr,
+                )
+                print(f"[INFO] SparseSupport enabled: source={src_used}, margin={margin}, voxel={voxel}, nn_thr={nn_thr}")
 
         except Exception:
             print("[WARN] SparseSupport enabled but initialization failed; disabling sparse support.")
-
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)

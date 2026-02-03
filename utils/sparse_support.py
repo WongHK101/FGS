@@ -28,6 +28,10 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
     _TORCH_AVAILABLE = False
 
+    def _query_np(self, query_xyz, max_voxel_radius: int = 2, return_index: bool = True):
+        """Backward-compatible alias for the old private method name."""
+        return self.query(query_xyz, max_voxel_radius=max_voxel_radius, return_index=return_index)
+
 
 # -----------------------------
 # COLMAP I/O helpers
@@ -226,129 +230,306 @@ def _voxel_index(xyz: np.ndarray, voxel: float) -> np.ndarray:
 
 
 class VoxelHashNN:
-    """Very lightweight NN approximation via voxel hashing.
+    """
+    Lightweight sparse-support nearest-neighbor index on a voxel grid.
 
-    Intended for querying a *small* batch of points (e.g. new Gaussians or
-    densification candidates) against COLMAP sparse points.
+    - Build: voxelize support points and keep ONE representative per voxel (centroid).
+    - Query: search neighbor voxels (default radius=1 => 27 neighbors), return nearest centroid distance.
 
-    This intentionally avoids heavy dependencies (scipy/sklearn).
+    Notes
+    -----
+    * Query path is pure PyTorch (supports CUDA) and avoids CPU/Numpy round-trips.
+    * Public interface is backward-compatible with the previous implementation:
+        - __init__(points_xyz, voxel_size)
+        - query(query_xyz, max_voxel_radius=2, return_index=True)
+        - query_torch(query_xyz, max_voxel_radius=2) -> torch.Tensor distances
     """
 
-    def __init__(
-        self,
-        points_xyz: np.ndarray,
-        voxel_size: float,
-        max_points_per_voxel: int = 256,
-    ) -> None:
-        self.voxel_size = float(voxel_size)
-        self.max_points_per_voxel = int(max_points_per_voxel)
+    _PACK_BITS = 21  # 3*21 = 63 bits
+    _PACK_OFF  = 1 << (_PACK_BITS - 1)  # 2^20
 
-        pts = np.asarray(points_xyz, dtype=np.float32)
-        if pts.ndim != 2 or pts.shape[1] != 3:
-            raise ValueError(f"points_xyz must be (N,3), got {pts.shape}")
-        self.points_xyz = pts
+    def __init__(self, points_xyz, voxel_size: float):
+        if voxel_size is None:
+            raise ValueError("voxel_size must be set for VoxelHashNN")
+        voxel_size = float(voxel_size)
+        if not (voxel_size > 0.0):
+            raise ValueError(f"voxel_size must be >0, got {voxel_size}")
 
-        self._grid: Dict[Tuple[int, int, int], np.ndarray] = {}
-        if len(pts) == 0:
+        self.voxel_size = voxel_size
+        self.device = None  # set in build/to()
+
+        # Keep a lightweight CPU copy for debugging/backward expectations.
+        self.points_xyz = None
+        try:
+            import numpy as _np
+            if isinstance(points_xyz, _np.ndarray):
+                self.points_xyz = points_xyz.astype(_np.float32, copy=False)
+        except Exception:
+            pass
+
+        # Core tensors (may live on CPU or CUDA)
+        self._keys_sorted = None          # (M,) int64
+        self._coords_sorted = None        # (M,3) int64
+        self._centroids_sorted = None     # (M,3) float32
+
+        # Cache neighbor offsets per radius (CPU), moved on-demand
+        self._offset_cache_cpu = {}   # r -> (K,3) int64 on CPU
+        self._offset_cache_dev = {}   # (r, device_str) -> tensor on device
+
+        self._build(points_xyz)
+
+    # ------------------------ internal helpers ------------------------
+
+    @staticmethod
+    def _as_torch_xyz(x):
+        import torch
+        if isinstance(x, torch.Tensor):
+            return x
+        # numpy / list / tuple
+        return torch.as_tensor(x)
+
+    @classmethod
+    def _pack_key(cls, coords_ijk):
+        """
+        Pack int64 voxel coords (..,3) into a single int64 key.
+        Collision-free as long as each axis is within [-2^20, 2^20-1].
+        """
+        import torch
+        c = coords_ijk.to(torch.int64)
+        off = cls._PACK_OFF
+        # We avoid raising in hot paths; out-of-range will still pack but may collide.
+        x = c[..., 0] + off
+        y = c[..., 1] + off
+        z = c[..., 2] + off
+        return (x << (2 * cls._PACK_BITS)) | (y << cls._PACK_BITS) | z
+
+    def _get_offsets(self, r: int, device):
+        import torch
+        r = int(r)
+        if r < 0:
+            r = 0
+
+        if r not in self._offset_cache_cpu:
+            rng = torch.arange(-r, r + 1, dtype=torch.int64)
+            # cartesian_prod returns (K,3)
+            off = torch.cartesian_prod(rng, rng, rng).contiguous()
+            self._offset_cache_cpu[r] = off
+
+        dev_key = (r, str(device))
+        if dev_key not in self._offset_cache_dev:
+            self._offset_cache_dev[dev_key] = self._offset_cache_cpu[r].to(device=device, non_blocking=True)
+        return self._offset_cache_dev[dev_key]
+
+    def _build(self, points_xyz):
+        """
+        Build voxel centroids and sorted hash keys.
+        """
+        import torch
+
+        pts = self._as_torch_xyz(points_xyz)
+        if pts.numel() == 0:
+            # Empty index
+            self.device = pts.device
+            self._keys_sorted = torch.empty((0,), dtype=torch.int64, device=self.device)
+            self._coords_sorted = torch.empty((0, 3), dtype=torch.int64, device=self.device)
+            self._centroids_sorted = torch.empty((0, 3), dtype=torch.float32, device=self.device)
             return
 
-        vox = _voxel_index(pts, self.voxel_size)
-        # group indices by voxel
-        # Use python dict of lists for memory friendliness
-        tmp: Dict[Tuple[int, int, int], List[int]] = {}
-        for i, (x, y, z) in enumerate(vox.tolist()):
-            k = (int(x), int(y), int(z))
-            lst = tmp.get(k)
-            if lst is None:
-                tmp[k] = [i]
-            else:
-                if len(lst) < self.max_points_per_voxel:
-                    lst.append(i)
-        # finalize to numpy arrays
-        for k, v in tmp.items():
-            self._grid[k] = np.asarray(v, dtype=np.int32)
+        if pts.ndim != 2 or pts.shape[-1] != 3:
+            raise ValueError(f"VoxelHashNN expects support xyz shape (N,3), got {tuple(pts.shape)}")
 
-    def _candidate_indices_for_voxel(self, k: Tuple[int, int, int]) -> Optional[np.ndarray]:
-        return self._grid.get(k, None)
+        pts = pts.to(dtype=torch.float32)
+        self.device = pts.device
 
-    def query(
-        self,
-        query_xyz: np.ndarray,
-        max_voxel_radius: int = 2,
-        return_index: bool = False,
-    ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-        """Query nearest distance for each query point.
+        # voxelize
+        coords = torch.floor(pts / float(self.voxel_size)).to(torch.int64)  # (N,3)
 
-        Parameters
-        ----------
-        query_xyz : (M,3) float
-        max_voxel_radius : int
-            Search in a cube of +/-R voxels.
-        return_index : bool
-            Whether to also return nearest point index.
+        # unique voxels + inverse map
+        uniq_coords, inv = torch.unique(coords, dim=0, return_inverse=True)
+        m = uniq_coords.shape[0]
+        if m == 0:
+            self._keys_sorted = torch.empty((0,), dtype=torch.int64, device=self.device)
+            self._coords_sorted = torch.empty((0, 3), dtype=torch.int64, device=self.device)
+            self._centroids_sorted = torch.empty((0, 3), dtype=torch.float32, device=self.device)
+            return
+
+        # centroid per voxel (in metric xyz, not ijk)
+        sums = torch.zeros((m, 3), dtype=torch.float32, device=self.device)
+        ones = torch.ones((pts.shape[0], 1), dtype=torch.float32, device=self.device)
+        counts = torch.zeros((m, 1), dtype=torch.float32, device=self.device)
+
+        sums.scatter_add_(0, inv[:, None].expand(-1, 3), pts)
+        counts.scatter_add_(0, inv[:, None], ones)
+        centroids = sums / torch.clamp(counts, min=1.0)
+
+        # sort by packed key for O(log M) lookup
+        keys = self._pack_key(uniq_coords)
+        sort_idx = torch.argsort(keys)
+        self._keys_sorted = keys[sort_idx].contiguous()
+        self._coords_sorted = uniq_coords[sort_idx].contiguous()
+        self._centroids_sorted = centroids[sort_idx].contiguous()
+
+    # ------------------------ public API ------------------------
+
+    def to(self, device):
+        """
+        Move the index to a given device (cpu/cuda).
+        """
+        import torch
+        device = torch.device(device)
+        if self._keys_sorted is None:
+            self.device = device
+            return self
+
+        self._keys_sorted = self._keys_sorted.to(device=device, non_blocking=True)
+        self._coords_sorted = self._coords_sorted.to(device=device, non_blocking=True)
+        self._centroids_sorted = self._centroids_sorted.to(device=device, non_blocking=True)
+        self.device = device
+
+        # offsets cache will be re-materialized on-demand
+        self._offset_cache_dev = {}
+        return self
+
+    def query_torch(self, query_xyz, max_voxel_radius: int = 2):
+        """
+        Query nearest centroid distance for each query point.
 
         Returns
         -------
-        dists : (M,) float32
-        idx : (M,) int32  (if return_index)
+        d : torch.Tensor, shape (Q,), float32
+            Euclidean distance to nearest voxel centroid in neighbor voxels.
+            If no neighbor voxel exists, distance is +inf.
         """
-        q = np.asarray(query_xyz, dtype=np.float32)
-        if q.ndim == 1:
-            q = q.reshape(1, 3)
-        if q.ndim != 2 or q.shape[1] != 3:
-            raise ValueError(f"query_xyz must be (M,3), got {q.shape}")
+        import torch
+        q = self._as_torch_xyz(query_xyz)
 
-        M = q.shape[0]
-        d2_best = np.full((M,), np.inf, dtype=np.float32)
-        i_best = np.full((M,), -1, dtype=np.int32)
+        if q.numel() == 0:
+            return torch.empty((0,), dtype=torch.float32, device=q.device)
 
-        if len(self.points_xyz) == 0 or not self._grid:
+        if q.ndim != 2 or q.shape[-1] != 3:
+            raise ValueError(f"query_xyz must have shape (Q,3), got {tuple(q.shape)}")
+
+        if self._keys_sorted is None or self._keys_sorted.numel() == 0:
+            return torch.full((q.shape[0],), float("inf"), dtype=torch.float32, device=q.device)
+
+        # Ensure index on same device as query
+        if self.device is None or self._keys_sorted.device != q.device:
+            # non-blocking move when possible; caller should preferably call .to() once.
+            self.to(q.device)
+
+        q = q.to(dtype=torch.float32)
+        q_vox = torch.floor(q / float(self.voxel_size)).to(torch.int64)
+
+        r = int(max_voxel_radius)
+        if r < 0:
+            r = 0
+        offsets = self._get_offsets(r, q.device)  # (K,3)
+        k = offsets.shape[0]
+
+        # neighbor coords and keys
+        neigh_coords = q_vox[:, None, :] + offsets[None, :, :]          # (Q,K,3)
+        neigh_keys = self._pack_key(neigh_coords).reshape(-1)           # (Q*K,)
+
+        keys_sorted = self._keys_sorted
+        m = keys_sorted.numel()
+
+        # searchsorted
+        pos = torch.searchsorted(keys_sorted, neigh_keys)               # (Q*K,)
+        pos_clamped = torch.clamp(pos, 0, max(m - 1, 0))
+
+        hit = (pos < m) & (keys_sorted[pos_clamped] == neigh_keys)
+        # Extra safety for rare packing collisions: verify coords equality
+        if hit.any():
+            coords_ref = self._coords_sorted[pos_clamped]
+            coords_q = neigh_coords.reshape(-1, 3)
+            hit = hit & (coords_ref == coords_q).all(dim=-1)
+
+        # gather centroids and compute distances
+        cent = self._centroids_sorted[pos_clamped]                      # (Q*K,3)
+        q_rep = q.repeat_interleave(k, dim=0)                            # (Q*K,3)
+        dist2 = (cent - q_rep).pow(2).sum(dim=-1)                        # (Q*K,)
+        dist2 = torch.where(hit, dist2, torch.full_like(dist2, float("inf")))
+
+        d2_min, _ = dist2.view(q.shape[0], k).min(dim=1)
+        return torch.sqrt(d2_min)
+
+    def query(self, query_xyz, max_voxel_radius: int = 2, return_index: bool = True):
+        """
+        Numpy-friendly wrapper.
+
+        Parameters
+        ----------
+        query_xyz : np.ndarray or torch.Tensor, shape (Q,3)
+        max_voxel_radius : int
+        return_index : bool
+
+        Returns
+        -------
+        d : np.ndarray, shape (Q,), float32
+        idx : np.ndarray, shape (Q,), int64   (only if return_index=True)
+              Index refers to the *voxel-centroid* list (after packing+sorting).
+              If no hit, idx is -1.
+        """
+        import torch
+        q = self._as_torch_xyz(query_xyz)
+        if q.ndim == 1 and q.numel() == 3:
+            q = q.view(1, 3)
+        if q.ndim != 2 or q.shape[-1] != 3:
+            raise ValueError(f"query_xyz must have shape (Q,3), got {tuple(q.shape)}")
+
+        if self._keys_sorted is None or self._keys_sorted.numel() == 0:
+            d = torch.full((q.shape[0],), float("inf"), dtype=torch.float32, device=q.device)
             if return_index:
-                return np.sqrt(d2_best), i_best
-            return np.sqrt(d2_best)
+                idx = torch.full((q.shape[0],), -1, dtype=torch.int64, device=q.device)
+                return d.to("cpu").numpy(), idx.to("cpu").numpy()
+            return d.to("cpu").numpy()
 
-        qvox = _voxel_index(q, self.voxel_size)
-        R = int(max_voxel_radius)
+        # Use the same vectorized path, but also return argmin indices.
+        if self.device is None or self._keys_sorted.device != q.device:
+            self.to(q.device)
 
-        for m in range(M):
-            vx, vy, vz = qvox[m].tolist()
-            # search neighbor voxels
-            cand: List[int] = []
-            for dx in range(-R, R + 1):
-                for dy in range(-R, R + 1):
-                    for dz in range(-R, R + 1):
-                        kk = (int(vx + dx), int(vy + dy), int(vz + dz))
-                        inds = self._candidate_indices_for_voxel(kk)
-                        if inds is not None:
-                            cand.extend(inds.tolist())
+        qf = q.to(dtype=torch.float32)
+        q_vox = torch.floor(qf / float(self.voxel_size)).to(torch.int64)
 
-            if not cand:
-                continue
+        r = int(max_voxel_radius)
+        if r < 0:
+            r = 0
+        offsets = self._get_offsets(r, q.device)
+        k = offsets.shape[0]
 
-            cand_idx = np.asarray(cand, dtype=np.int32)
-            pts = self.points_xyz[cand_idx]
-            diff = pts - q[m : m + 1]
-            d2 = np.sum(diff * diff, axis=1)
-            j = int(np.argmin(d2))
-            d2_best[m] = float(d2[j])
-            i_best[m] = int(cand_idx[j])
+        neigh_coords = q_vox[:, None, :] + offsets[None, :, :]
+        neigh_keys = self._pack_key(neigh_coords).reshape(-1)
 
-        if return_index:
-            return np.sqrt(d2_best), i_best
-        return np.sqrt(d2_best)
+        keys_sorted = self._keys_sorted
+        m = keys_sorted.numel()
+        pos = torch.searchsorted(keys_sorted, neigh_keys)
+        pos_clamped = torch.clamp(pos, 0, max(m - 1, 0))
+        hit = (pos < m) & (keys_sorted[pos_clamped] == neigh_keys)
+        if hit.any():
+            coords_ref = self._coords_sorted[pos_clamped]
+            coords_q = neigh_coords.reshape(-1, 3)
+            hit = hit & (coords_ref == coords_q).all(dim=-1)
 
-    def query_torch(
-        self,
-        query_xyz: "torch.Tensor",
-        max_voxel_radius: int = 2,
-    ) -> "torch.Tensor":
-        """Torch-friendly wrapper (runs on CPU; returns tensor on original device)."""
-        if not _TORCH_AVAILABLE:
-            raise RuntimeError("torch is not available, cannot call query_torch")
-        dev = query_xyz.device
-        q_np = query_xyz.detach().float().cpu().numpy()
-        d_np = self.query(q_np, max_voxel_radius=max_voxel_radius, return_index=False)
-        return torch.from_numpy(d_np).to(dev)
+        cent = self._centroids_sorted[pos_clamped]
+        q_rep = qf.repeat_interleave(k, dim=0)
+        dist2 = (cent - q_rep).pow(2).sum(dim=-1)
+        dist2 = torch.where(hit, dist2, torch.full_like(dist2, float("inf")))
+
+        dist2_view = dist2.view(q.shape[0], k)
+        d2_min, argmin = dist2_view.min(dim=1)
+        d = torch.sqrt(d2_min)
+
+        if not return_index:
+            return d.to("cpu").numpy()
+
+        # Map argmin to centroid index; if all inf => -1
+        hit_view = hit.view(q.shape[0], k)
+        any_hit = hit_view.any(dim=1)
+        # centroid index in sorted arrays:
+        idx = pos_clamped.view(q.shape[0], k).gather(1, argmin[:, None]).squeeze(1)
+        idx = torch.where(any_hit, idx, torch.full_like(idx, -1, dtype=torch.int64))
+
+        return d.to("cpu").numpy(), idx.to("cpu").numpy()
 
 
 # -----------------------------

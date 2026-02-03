@@ -59,16 +59,34 @@ def exists_nonempty_dir(p: Path) -> bool:
     return p.exists() and p.is_dir() and any(p.iterdir())
 
 
-def _validate_finite_float(ap: argparse.ArgumentParser, name: str, v: Optional[float]) -> None:
+def _validate_finite_float(
+    ap: argparse.ArgumentParser,
+    name: str,
+    v: Optional[float],
+    *,
+    min_value: Optional[float] = None,
+    strict_positive: bool = False,
+) -> None:
     """Argparse-time validation for optional floats.
 
-    We keep these checks minimal and only trigger them when Sparse Support is enabled,
-    so default behavior remains identical.
+    Notes:
+      - Only called when the corresponding feature is enabled, so defaults remain unchanged.
+      - When strict_positive=True, requires v > 0.
+      - When min_value is set, requires v >= min_value.
     """
     if v is None:
         return
-    if not math.isfinite(float(v)):
+    try:
+        fv = float(v)
+    except Exception:
+        ap.error(f"{name} must be a float, got {v!r}")
+        return
+    if not math.isfinite(fv):
         ap.error(f"{name} must be a finite float, got {v!r}")
+    if strict_positive and fv <= 0.0:
+        ap.error(f"{name} must be > 0, got {v!r}")
+    if (min_value is not None) and fv < float(min_value):
+        ap.error(f"{name} must be >= {min_value}, got {v!r}")
 
 
 def _str2bool(v: str) -> bool:
@@ -100,31 +118,63 @@ def _build_tstruct_train_args(args: argparse.Namespace) -> List[str]:
     ]
 
 
-def _build_ss_train_args(ap: argparse.ArgumentParser, args: argparse.Namespace) -> List[str]:
-    """Build extra train.py CLI args for Sparse Support gating.
+def _build_ss_train_args(*pos, **kw) -> List[str]:
+    """Build train.py args for Sparse Support.
 
-    IMPORTANT: must be a no-op when args.ss_enable is False.
+    Accepts either:
+      - _build_ss_train_args(ap, args)
+      - _build_ss_train_args(args, ap=ap)  (preferred)
+      - _build_ss_train_args(args)         (errors are raised as RuntimeError)
     """
+    ap: Optional[argparse.ArgumentParser] = kw.get("ap", None)
+    args: Optional[argparse.Namespace] = None
+
+    if len(pos) == 1 and isinstance(pos[0], argparse.Namespace):
+        args = pos[0]
+    elif len(pos) == 2 and isinstance(pos[0], argparse.ArgumentParser) and isinstance(pos[1], argparse.Namespace):
+        ap, args = pos[0], pos[1]
+    elif len(pos) == 2 and isinstance(pos[1], argparse.ArgumentParser) and isinstance(pos[0], argparse.Namespace):
+        args, ap = pos[0], pos[1]
+    else:
+        raise TypeError("_build_ss_train_args expects (args) or (ap, args)")
+
+    if args is None:
+        raise RuntimeError("internal: args is None in _build_ss_train_args")
+
+    # Validation (only when SS is enabled)
+    if getattr(args, "ss_enable", False):
+        # If ap is missing, fall back to RuntimeError with clear messages.
+        def _err(msg: str) -> None:
+            if ap is not None:
+                ap.error(msg)
+            raise RuntimeError(msg)
+
+        # source is already validated by argparse choices
+        try:
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_aabb_margin", args.ss_aabb_margin, min_value=0.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_voxel_size", args.ss_voxel_size, strict_positive=True)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_nn_dist_thr", args.ss_nn_dist_thr, min_value=0.0)
+        except SystemExit:
+            # argparse.error triggers SystemExit; just re-raise
+            raise
+        except Exception as e:
+            _err(str(e))
+
     if not getattr(args, "ss_enable", False):
         return []
 
-    # Minimal validation (argparse already validates choices).
-    _validate_finite_float(ap, "--ss_aabb_margin", getattr(args, "ss_aabb_margin", None))
-    _validate_finite_float(ap, "--ss_voxel_size", getattr(args, "ss_voxel_size", None))
-    _validate_finite_float(ap, "--ss_nn_dist_thr", getattr(args, "ss_nn_dist_thr", None))
+    out: List[str] = ["--ss_enable"]
 
-    ss_args: List[str] = [
-        "--ss_enable",
-        "--ss_source",
-        str(args.ss_source),
-        "--ss_aabb_margin",
-        str(args.ss_aabb_margin),
-    ]
+    # Always forward explicit SS params once enabled.
+    out += ["--ss_source", str(args.ss_source)]
+    out += ["--ss_aabb_margin", str(args.ss_aabb_margin)]
+
     if args.ss_voxel_size is not None:
-        ss_args += ["--ss_voxel_size", str(args.ss_voxel_size)]
+        out += ["--ss_voxel_size", str(args.ss_voxel_size)]
     if args.ss_nn_dist_thr is not None:
-        ss_args += ["--ss_nn_dist_thr", str(args.ss_nn_dist_thr)]
-    return ss_args
+        out += ["--ss_nn_dist_thr", str(args.ss_nn_dist_thr)]
+    return out
+
 
 def list_images(dir_path: Path) -> List[Path]:
     exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
@@ -523,11 +573,11 @@ def main() -> None:
     # Sparse Support argument sanity (only when enabled)
     ss_train_extra: List[str] = []
     if args.ss_enable:
-        _validate_finite_float(ap, "--ss_aabb_margin", args.ss_aabb_margin)
-        _validate_finite_float(ap, "--ss_voxel_size", args.ss_voxel_size)
-        _validate_finite_float(ap, "--ss_nn_dist_thr", args.ss_nn_dist_thr)
+        _validate_finite_float(ap, "--ss_aabb_margin", args.ss_aabb_margin, min_value=0.0)
+        _validate_finite_float(ap, "--ss_voxel_size", args.ss_voxel_size, strict_positive=True)
+        _validate_finite_float(ap, "--ss_nn_dist_thr", args.ss_nn_dist_thr, min_value=0.0)
         try:
-            ss_train_extra = _build_ss_train_args(args)
+            ss_train_extra = _build_ss_train_args(args, ap=ap)
         except ValueError as e:
             ap.error(str(e))
     # Improvement-4 forwarding args (only forwarded when enabled; safe no-op otherwise)

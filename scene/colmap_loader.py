@@ -13,6 +13,7 @@ import numpy as np
 from typing import Optional
 import collections
 import struct
+import os
 
 CameraModel = collections.namedtuple(
     "CameraModel", ["model_id", "model_name", "num_params"])

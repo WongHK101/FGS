@@ -11,6 +11,7 @@
 
 import torch
 import numpy as np
+from typing import Optional, Tuple, Any
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
@@ -63,16 +64,13 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
+        # --- Sparse Support (optional; default disabled) ---
+        self._ss_aabb_lo: Optional["torch.Tensor"] = None
+        self._ss_aabb_hi: Optional["torch.Tensor"] = None
+        self._ss_index: Any = None
+        self._ss_nn_dist_thr: Optional[float] = None
+
         self.setup_functions()
-        
-        # --- Sparse support (optional; disabled by default) ---
-        # These are used to gate densification in unsupported space (e.g., empty air).
-        # They are intentionally NOT included in capture()/restore() to stay checkpoint-compatible.
-        self._sparse_support_aabb_lo = None   # torch.Tensor shape (3,)
-        self._sparse_support_aabb_hi = None   # torch.Tensor shape (3,)
-        self._sparse_support_index = None     # e.g., utils.sparse_support.VoxelHashNN
-        self._sparse_support_nn_dist_thr = None
-        self._sparse_support_enabled = False
 
     def capture(self):
         return (
@@ -107,6 +105,115 @@ class GaussianModel:
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
+
+
+
+    # ============================================================
+    # Sparse Support public API (optional; backward-compatible)
+    # ============================================================
+    def clear_sparse_support(self):
+        """Disable sparse-support gating and clear cached support."""
+        self._ss_aabb_lo = None
+        self._ss_aabb_hi = None
+        self._ss_index = None
+        self._ss_nn_dist_thr = None
+
+    def set_sparse_support(self, aabb=None, index=None, nn_dist_thr=None):
+        """Enable optional sparse-support gating.
+
+        Args:
+            aabb: Optional tuple (lo, hi), each array-like shape (3,). If None, AABB gating is disabled.
+            index: Optional VoxelHashNN-like object with .to(device) and .query_torch(xyz)->dist.
+            nn_dist_thr: Optional float threshold for nearest-support distance gating.
+        """
+        # Clear if nothing provided
+        if aabb is None and index is None and nn_dist_thr is None:
+            self.clear_sparse_support()
+            return
+
+        device = self.get_xyz.device if hasattr(self, 'get_xyz') else None
+
+        # AABB
+        if aabb is not None:
+            if not (isinstance(aabb, (tuple, list)) and len(aabb) == 2):
+                raise ValueError('set_sparse_support: aabb must be (lo, hi) or None')
+            lo, hi = aabb
+            import torch
+            lo_t = torch.as_tensor(lo, dtype=torch.float32, device=device)
+            hi_t = torch.as_tensor(hi, dtype=torch.float32, device=device)
+            if lo_t.numel() != 3 or hi_t.numel() != 3:
+                raise ValueError('set_sparse_support: aabb lo/hi must have 3 elements')
+            self._ss_aabb_lo = lo_t.view(3)
+            self._ss_aabb_hi = hi_t.view(3)
+        else:
+            self._ss_aabb_lo = None
+            self._ss_aabb_hi = None
+
+        # Index
+        self._ss_index = index
+        if self._ss_index is not None and hasattr(self._ss_index, 'to') and device is not None:
+            # Move once; NEVER move in hot path
+            self._ss_index = self._ss_index.to(device)
+
+        # NN threshold
+        self._ss_nn_dist_thr = float(nn_dist_thr) if nn_dist_thr is not None else None
+
+    def _ss_is_enabled(self) -> bool:
+        return (self._ss_aabb_lo is not None and self._ss_aabb_hi is not None) or (self._ss_index is not None and self._ss_nn_dist_thr is not None)
+
+    def _ss_gate_selected_mask(self, selected_mask, xyz_all):
+        """Filter a boolean selected_mask using AABB and optional NN distance.
+
+        This is called only in densify, NOT in the per-iteration hot path.
+        """
+        import torch
+        if selected_mask is None:
+            return selected_mask
+        if not self._ss_is_enabled():
+            return selected_mask
+        if xyz_all is None or xyz_all.numel() == 0:
+            return selected_mask
+        if xyz_all.dim() != 2 or xyz_all.size(-1) != 3:
+            raise ValueError('SparseSupport gating expects xyz (N,3)')
+        if selected_mask.numel() != xyz_all.size(0):
+            raise ValueError('SparseSupport gating: mask length must match xyz')
+
+        idx = torch.nonzero(selected_mask, as_tuple=False).squeeze(-1)
+        if idx.numel() == 0:
+            return selected_mask
+
+        xyz_sel = xyz_all[idx]
+        keep = torch.ones((xyz_sel.size(0),), dtype=torch.bool, device=xyz_sel.device)
+
+        # AABB gating
+        if self._ss_aabb_lo is not None and self._ss_aabb_hi is not None:
+            lo = self._ss_aabb_lo
+            hi = self._ss_aabb_hi
+            if lo.device != xyz_sel.device:
+                lo = lo.to(xyz_sel.device)
+                hi = hi.to(xyz_sel.device)
+            keep = keep & (xyz_sel >= lo).all(dim=-1) & (xyz_sel <= hi).all(dim=-1)
+
+        # Optional NN distance gating
+        if self._ss_index is not None and self._ss_nn_dist_thr is not None:
+            if keep.any():
+                xyz_keep = xyz_sel[keep]
+                # query_torch must be device-native; forbid cpu/numpy conversions inside index
+                dist = self._ss_index.query_torch(xyz_keep)
+                keep2 = dist <= float(self._ss_nn_dist_thr)
+                # scatter back
+                tmp = keep.clone()
+                tmp_idx = torch.nonzero(keep, as_tuple=False).squeeze(-1)
+                tmp[tmp_idx] = keep2
+                keep = tmp
+            else:
+                # nothing passes AABB
+                pass
+
+        # write back
+        out = selected_mask.clone()
+        out[idx] = keep
+        return out
 
     @property
     def get_scaling(self):
@@ -183,84 +290,6 @@ class GaussianModel:
         self.pretrained_exposures = None
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
-
-
-    # -------------------------
-    # Sparse support (optional)
-    # -------------------------
-    def set_sparse_support(self, aabb=None, index=None, nn_dist_thr=None):
-        """Attach sparse-support constraints used for optional densification gating.
-
-        Args:
-            aabb: Optional tuple (lo, hi), each array-like with 3 floats.
-            index: Optional nearest-neighbor helper (e.g., utils.sparse_support.VoxelHashNN).
-                   If provided, it should expose query_torch(xyz) -> (dists, idx) or dists.
-            nn_dist_thr: Optional float; if set together with index, points farther than this
-                         distance to the sparse support will be rejected.
-        """
-        if aabb is None:
-            self._sparse_support_aabb_lo = None
-            self._sparse_support_aabb_hi = None
-        else:
-            lo, hi = aabb
-            lo_t = torch.as_tensor(lo, dtype=torch.float32).view(-1)
-            hi_t = torch.as_tensor(hi, dtype=torch.float32).view(-1)
-            assert lo_t.numel() == 3 and hi_t.numel() == 3, "aabb lo/hi must be 3D"
-            # Allow degenerate boxes, but keep ordering sane.
-            assert torch.all(hi_t >= lo_t), "aabb hi must be >= lo"
-            self._sparse_support_aabb_lo = lo_t.contiguous()
-            self._sparse_support_aabb_hi = hi_t.contiguous()
-
-        self._sparse_support_index = index
-        self._sparse_support_nn_dist_thr = (float(nn_dist_thr) if nn_dist_thr is not None else None)
-        self._sparse_support_enabled = (self._sparse_support_aabb_lo is not None) or (self._sparse_support_index is not None)
-
-    def clear_sparse_support(self):
-        """Disable sparse-support gating."""
-        self._sparse_support_aabb_lo = None
-        self._sparse_support_aabb_hi = None
-        self._sparse_support_index = None
-        self._sparse_support_nn_dist_thr = None
-        self._sparse_support_enabled = False
-
-    def has_sparse_support(self):
-        return bool(self._sparse_support_enabled)
-
-    def _sparse_support_accept_mask(self, xyz: torch.Tensor):
-        """Return a boolean mask for xyz (N,3) that passes sparse-support constraints."""
-        if (not self._sparse_support_enabled) or xyz is None:
-            return None
-        if xyz.numel() == 0:
-            return torch.zeros((xyz.shape[0],), device=xyz.device, dtype=torch.bool)
-
-        m = torch.ones((xyz.shape[0],), device=xyz.device, dtype=torch.bool)
-
-        # AABB gating (always available when aabb is provided)
-        if self._sparse_support_aabb_lo is not None and self._sparse_support_aabb_hi is not None:
-            lo = self._sparse_support_aabb_lo.to(device=xyz.device, dtype=xyz.dtype).view(1, 3)
-            hi = self._sparse_support_aabb_hi.to(device=xyz.device, dtype=xyz.dtype).view(1, 3)
-            m = torch.logical_and(m, torch.all(xyz >= lo, dim=1))
-            m = torch.logical_and(m, torch.all(xyz <= hi, dim=1))
-
-        # NN-distance gating (optional; depends on provided index)
-        if self._sparse_support_index is not None and self._sparse_support_nn_dist_thr is not None:
-            try:
-                q = getattr(self._sparse_support_index, "query_torch", None)
-                if q is not None:
-                    out = q(xyz)
-                else:
-                    out = self._sparse_support_index(xyz)  # best-effort
-                if isinstance(out, (tuple, list)):
-                    dists = out[0]
-                else:
-                    dists = out
-                dists = dists.view(-1).to(device=xyz.device)
-                m = torch.logical_and(m, dists <= float(self._sparse_support_nn_dist_thr))
-            except Exception:
-                # Never crash training due to optional support index.
-                pass
-
-        return m
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -502,11 +531,9 @@ class GaussianModel:
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
 
-        # Optional sparse-support gating (parent positions)
-        if self._sparse_support_enabled:
-            _ss = self._sparse_support_accept_mask(self.get_xyz)
-            if _ss is not None:
-                selected_pts_mask = torch.logical_and(selected_pts_mask, _ss)
+        # SparseSupport gating (optional; default off)
+        if getattr(self, '_ss_enabled', False):
+            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask)
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
@@ -520,35 +547,9 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
 
-        # Optional sparse-support gating (child positions). If enabled and all children of a parent
-        # are rejected, we keep that parent (do not prune it).
-        prune_mask = selected_pts_mask
-        if self._sparse_support_enabled and new_xyz is not None and new_xyz.numel() > 0:
-            _child_ok = self._sparse_support_accept_mask(new_xyz)
-            if _child_ok is not None and _child_ok.numel() == new_xyz.shape[0]:
-                sel_idx = torch.nonzero(selected_pts_mask).squeeze(1)
-                if sel_idx.numel() > 0:
-                    _child_ok_2d = _child_ok.view(-1, N)
-                    _keep_any = _child_ok_2d.any(dim=1)
-
-                    prune_mask = selected_pts_mask.clone()
-                    prune_mask[sel_idx[~_keep_any]] = False
-
-                    _parent_any = _keep_any.repeat_interleave(N)
-                    _child_ok = torch.logical_and(_child_ok, _parent_any)
-
-                if _child_ok.numel() == new_xyz.shape[0]:
-                    new_xyz = new_xyz[_child_ok]
-                    new_scaling = new_scaling[_child_ok]
-                    new_rotation = new_rotation[_child_ok]
-                    new_features_dc = new_features_dc[_child_ok]
-                    new_features_rest = new_features_rest[_child_ok]
-                    new_opacity = new_opacity[_child_ok]
-                    new_tmp_radii = new_tmp_radii[_child_ok]
-
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
 
-        prune_filter = torch.cat((prune_mask, torch.zeros(new_xyz.shape[0], device="cuda", dtype=bool)))
+        prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
@@ -556,13 +557,11 @@ class GaussianModel:
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-
-        # Optional sparse-support gating (parent positions)
-        if self._sparse_support_enabled:
-            _ss = self._sparse_support_accept_mask(self.get_xyz)
-            if _ss is not None:
-                selected_pts_mask = torch.logical_and(selected_pts_mask, _ss)
         
+        
+        # SparseSupport gating (optional; default off)
+        if getattr(self, '_ss_enabled', False):
+            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask)
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -575,9 +574,6 @@ class GaussianModel:
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii):
-        # Guard against missing radii (some callers may not provide it)
-        if radii is None:
-            radii = torch.zeros((self.get_xyz.shape[0],), device="cuda")
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
