@@ -69,6 +69,8 @@ class GaussianModel:
         self._ss_aabb_hi: Optional["torch.Tensor"] = None
         self._ss_index: Any = None
         self._ss_nn_dist_thr: Optional[float] = None
+        self._ss_enabled: bool = False
+        self._ss_logged_config: bool = False
 
         self.setup_functions()
 
@@ -117,6 +119,7 @@ class GaussianModel:
         self._ss_aabb_hi = None
         self._ss_index = None
         self._ss_nn_dist_thr = None
+        self._ss_enabled = False
 
     def set_sparse_support(self, aabb=None, index=None, nn_dist_thr=None):
         """Enable optional sparse-support gating.
@@ -130,6 +133,8 @@ class GaussianModel:
         if aabb is None and index is None and nn_dist_thr is None:
             self.clear_sparse_support()
             return
+        # Default to disabled unless we successfully configure support.
+        self._ss_enabled = False
 
         device = self.get_xyz.device if hasattr(self, 'get_xyz') else None
 
@@ -157,6 +162,23 @@ class GaussianModel:
 
         # NN threshold
         self._ss_nn_dist_thr = float(nn_dist_thr) if nn_dist_thr is not None else None
+        # Mark enabled only when support configuration is valid.
+        self._ss_enabled = self._ss_is_enabled()
+        # One-time configuration log (only when support is being set).
+        if not getattr(self, "_ss_logged_config", False):
+            has_aabb = (self._ss_aabb_lo is not None and self._ss_aabb_hi is not None)
+            has_index = (self._ss_index is not None)
+            nn_thr = self._ss_nn_dist_thr
+            aabb_msg = ""
+            if has_aabb:
+                try:
+                    lo = self._ss_aabb_lo.detach().cpu().tolist()
+                    hi = self._ss_aabb_hi.detach().cpu().tolist()
+                    aabb_msg = f" aabb_lo={lo} aabb_hi={hi}"
+                except Exception:
+                    aabb_msg = ""
+            print(f"[INFO] SparseSupport configured: enabled={self._ss_enabled} has_aabb={has_aabb} has_index={has_index} nn_thr={nn_thr}{aabb_msg}")
+            self._ss_logged_config = True
 
     def _ss_is_enabled(self) -> bool:
         return (self._ss_aabb_lo is not None and self._ss_aabb_hi is not None) or (self._ss_index is not None and self._ss_nn_dist_thr is not None)
@@ -180,10 +202,19 @@ class GaussianModel:
 
         idx = torch.nonzero(selected_mask, as_tuple=False).squeeze(-1)
         if idx.numel() == 0:
+            self._ss_last_gate_stats = {
+                "before": 0,
+                "after_aabb": 0,
+                "after_nn": 0,
+                "rejected_aabb": 0,
+                "rejected_nn": 0,
+                "nn_ms": None,
+            }
             return selected_mask
 
         xyz_sel = xyz_all[idx]
         keep = torch.ones((xyz_sel.size(0),), dtype=torch.bool, device=xyz_sel.device)
+        before = int(idx.numel())
 
         # AABB gating
         if self._ss_aabb_lo is not None and self._ss_aabb_hi is not None:
@@ -193,13 +224,19 @@ class GaussianModel:
                 lo = lo.to(xyz_sel.device)
                 hi = hi.to(xyz_sel.device)
             keep = keep & (xyz_sel >= lo).all(dim=-1) & (xyz_sel <= hi).all(dim=-1)
+        after_aabb = int(keep.sum().item())
 
         # Optional NN distance gating
+        nn_ms = None
         if self._ss_index is not None and self._ss_nn_dist_thr is not None:
             if keep.any():
                 xyz_keep = xyz_sel[keep]
                 # query_torch must be device-native; forbid cpu/numpy conversions inside index
+                import time
+                t0 = time.perf_counter()
                 dist = self._ss_index.query_torch(xyz_keep)
+                t1 = time.perf_counter()
+                nn_ms = (t1 - t0) * 1000.0
                 keep2 = dist <= float(self._ss_nn_dist_thr)
                 # scatter back
                 tmp = keep.clone()
@@ -209,6 +246,15 @@ class GaussianModel:
             else:
                 # nothing passes AABB
                 pass
+        after_nn = int(keep.sum().item())
+        self._ss_last_gate_stats = {
+            "before": before,
+            "after_aabb": after_aabb,
+            "after_nn": after_nn,
+            "rejected_aabb": before - after_aabb,
+            "rejected_nn": after_aabb - after_nn,
+            "nn_ms": nn_ms,
+        }
 
         # write back
         out = selected_mask.clone()
@@ -533,7 +579,22 @@ class GaussianModel:
 
         # SparseSupport gating (optional; default off)
         if getattr(self, '_ss_enabled', False):
-            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask)
+            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask, self.get_xyz)
+            stats = getattr(self, "_ss_last_gate_stats", None)
+            if stats is not None:
+                rejected_aabb = int(stats.get("rejected_aabb", 0) or 0)
+                rejected_nn = int(stats.get("rejected_nn", 0) or 0)
+                if (rejected_aabb > 0 or rejected_nn > 0) and (not getattr(self, "_ss_logged_split", False)):
+                    msg = (
+                        f"[INFO] SparseSupport densify_split gating: "
+                        f"before={stats.get('before')} after_aabb={stats.get('after_aabb')} after_nn={stats.get('after_nn')} "
+                        f"rejected_aabb={rejected_aabb} rejected_nn={rejected_nn}"
+                    )
+                    nn_ms = stats.get("nn_ms", None)
+                    if nn_ms is not None:
+                        msg += f" nn_ms={nn_ms:.2f}"
+                    print(msg)
+                    self._ss_logged_split = True
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
@@ -561,7 +622,22 @@ class GaussianModel:
         
         # SparseSupport gating (optional; default off)
         if getattr(self, '_ss_enabled', False):
-            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask)
+            selected_pts_mask = self._ss_gate_selected_mask(selected_pts_mask, self.get_xyz)
+            stats = getattr(self, "_ss_last_gate_stats", None)
+            if stats is not None:
+                rejected_aabb = int(stats.get("rejected_aabb", 0) or 0)
+                rejected_nn = int(stats.get("rejected_nn", 0) or 0)
+                if (rejected_aabb > 0 or rejected_nn > 0) and (not getattr(self, "_ss_logged_clone", False)):
+                    msg = (
+                        f"[INFO] SparseSupport densify_clone gating: "
+                        f"before={stats.get('before')} after_aabb={stats.get('after_aabb')} after_nn={stats.get('after_nn')} "
+                        f"rejected_aabb={rejected_aabb} rejected_nn={rejected_nn}"
+                    )
+                    nn_ms = stats.get("nn_ms", None)
+                    if nn_ms is not None:
+                        msg += f" nn_ms={nn_ms:.2f}"
+                    print(msg)
+                    self._ss_logged_clone = True
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]

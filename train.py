@@ -140,6 +140,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    ss_logged_densify_trigger = False
+    if getattr(args, "ss_enable", False):
+        densify_possible = False
+        try:
+            interval = int(opt.densification_interval)
+        except Exception:
+            interval = 0
+        if interval > 0:
+            start_iter = first_iter
+            end_iter = min(int(opt.iterations), int(opt.densify_until_iter) - 1)
+            start_iter = max(start_iter, int(opt.densify_from_iter) + 1)
+            if start_iter <= end_iter:
+                k = ((start_iter + interval - 1) // interval) * interval
+                if k <= end_iter:
+                    densify_possible = True
+        if not densify_possible:
+            print("[WARN] ss_enable=True but densify is disabled in this stage; SS gating logs won't appear.")
     struct_warned = False
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
@@ -264,6 +281,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    if getattr(args, "ss_enable", False) and not ss_logged_densify_trigger:
+                        print(f"[INFO] densify triggered at iter={iteration} (ss_enable=True)")
+                        ss_logged_densify_trigger = True
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
                 
