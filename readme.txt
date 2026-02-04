@@ -155,7 +155,16 @@ python eval_blend_sweep.py `
   --auto_render
 # 查看模型：
 E:\3DGS\GS\gaussian-splatting\SIBR_viewers\install\bin\SIBR_gaussianViewer_app.exe `
--m F:\databackup\GeoTGS-TC\output\PVpanel_maximprove_ssAABB_tstruct_0.2\Model_T
+-m F:\databackup\GeoTGS-TC\output\ss_run\ssnn_02_04
+
+draft:
+python train.py `
+-s "F:\databackup\GeoTGS-TC\input\PVpanel" `
+-m "F:\databackup\GeoTGS-TC\output\test1" `
+--ss_enable --ss_source init_pcd --iterations 200 --densify_from_iter 0 --densify_until_iter 200 --densification_interval 50 --disable_viewer
+
+
+
 ============================================================
 新增：Sparse Support gating（改进1，可选，默认关闭）
 ============================================================

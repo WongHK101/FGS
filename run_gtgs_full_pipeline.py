@@ -893,10 +893,6 @@ def main() -> None:
         "--eval",
     ]
 
-    # Forward sparse support opts only when explicitly enabled.
-    if args.ss_enable:
-        train2_cmd.extend(ss_train_extra)
-
     train2_cmd.extend(tstruct_train_extra)
     train2_outputs_ok = ckpt_t.exists()
     # Preflight: step 10 requires stage-1 checkpoint and thermal_UD dataset

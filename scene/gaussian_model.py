@@ -261,6 +261,58 @@ class GaussianModel:
         out[idx] = keep
         return out
 
+    def prune_outside_sparse_support(self):
+        """Prune gaussians outside configured sparse support."""
+        if not getattr(self, '_ss_enabled', False) or not self._ss_is_enabled():
+            return None
+        import torch
+        xyz = self.get_xyz
+        if xyz is None or xyz.numel() == 0:
+            return (0, 0)
+        selected_mask = torch.ones((xyz.size(0),), dtype=torch.bool, device=xyz.device)
+        keep_mask = self._ss_gate_selected_mask(selected_mask, xyz)
+        if keep_mask is None:
+            return None
+        before = int(keep_mask.numel())
+        after = int(keep_mask.sum().item())
+        if after >= before:
+            return (before, after)
+        prune_mask = ~keep_mask
+        reset_tmp_radii = False
+        if not hasattr(self, "tmp_radii") or self.tmp_radii is None:
+            self.tmp_radii = torch.zeros((xyz.size(0),), device=xyz.device)
+            reset_tmp_radii = True
+        self.prune_points(prune_mask)
+        if reset_tmp_radii:
+            self.tmp_radii = None
+        return (before, after)
+
+    def clamp_scaling_max_(self, max_scale: float):
+        """Clamp log-space scaling to a maximum scale value.
+
+        Returns (clamped_gauss, total, before_smax, after_smax).
+        """
+        import math
+        import torch
+        try:
+            max_scale_f = float(max_scale)
+        except Exception:
+            return (0, 0, 0.0, 0.0)
+        if max_scale_f <= 0.0:
+            return (0, 0, 0.0, 0.0)
+        if self._scaling is None or self._scaling.numel() == 0:
+            return (0, 0, 0.0, 0.0)
+        thr_log = math.log(max_scale_f)
+        with torch.no_grad():
+            smax_before = torch.max(self.get_scaling, dim=1).values
+            before_smax = float(smax_before.max().item()) if smax_before.numel() > 0 else 0.0
+            clamped_gauss = int((self._scaling.max(dim=1).values > thr_log).sum().item())
+            total = int(self._scaling.shape[0])
+            self._scaling.data.clamp_(max=thr_log)
+            smax_after = torch.max(self.get_scaling, dim=1).values
+            after_smax = float(smax_after.max().item()) if smax_after.numel() > 0 else 0.0
+        return (clamped_gauss, total, before_smax, after_smax)
+
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)

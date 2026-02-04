@@ -123,6 +123,128 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+    if getattr(args, "ss_prune_before_thermal", False) and checkpoint:
+        if not getattr(args, "ss_enable", False):
+            print("[WARN] ss_prune_before_thermal set but ss_enable=False; skipping prune.")
+        elif not (getattr(gaussians, "_ss_enabled", False) and gaussians._ss_is_enabled()):
+            print("[WARN] ss_prune_before_thermal set but SparseSupport not configured; skipping prune.")
+        else:
+            prune_stats = gaussians.prune_outside_sparse_support()
+            if prune_stats is not None:
+                before, after = prune_stats
+                removed = before - after
+                keep_ratio = (after / float(before)) if before > 0 else 1.0
+                print(f"[INFO] SparseSupport prune_before_thermal: before={before} after={after} removed={removed} keep_ratio={keep_ratio:.6f}")
+
+    if args.clamp_scale_max is not None and checkpoint and getattr(args, "start_checkpoint", None):
+        clamped_gauss, total, before_smax, after_smax = gaussians.clamp_scaling_max_(args.clamp_scale_max)
+        if clamped_gauss > 0:
+            print(
+                f"[INFO] ClampScaling thermal_after_restore: max_scale={args.clamp_scale_max} "
+                f"clamped_gauss={clamped_gauss}/{total} before_smax={before_smax:.6f} after_smax={after_smax:.6f}"
+            )
+
+    if getattr(args, "thermal_reset_features", False) and checkpoint and getattr(args, "start_checkpoint", None):
+        with torch.no_grad():
+            if gaussians._features_dc is not None:
+                gaussians._features_dc.zero_()
+            if gaussians._features_rest is not None:
+                gaussians._features_rest.zero_()
+        adam_cleared = False
+        try:
+            for group in gaussians.optimizer.param_groups:
+                name = group.get("name", None)
+                if name not in ("f_dc", "f_rest"):
+                    continue
+                if not group.get("params"):
+                    continue
+                p = group["params"][0]
+                st = gaussians.optimizer.state.get(p, None)
+                if st is None:
+                    continue
+                for key in ("exp_avg", "exp_avg_sq"):
+                    if key in st and torch.is_tensor(st[key]):
+                        st[key].zero_()
+                        adam_cleared = True
+        except Exception:
+            adam_cleared = False
+        print(f"[INFO] ThermalResetFeatures: sh_zeroed=1 adam_state_cleared={1 if adam_cleared else 0}")
+
+    def _reapply_lrs_after_restore() -> None:
+        for group in gaussians.optimizer.param_groups:
+            name = group.get("name", None)
+            if name == "xyz":
+                group["lr"] = opt.position_lr_init * gaussians.spatial_lr_scale
+            elif name == "f_dc":
+                group["lr"] = opt.feature_lr
+            elif name == "f_rest":
+                group["lr"] = opt.feature_lr / 20.0
+            elif name == "opacity":
+                group["lr"] = opt.opacity_lr
+            elif name == "scaling":
+                group["lr"] = opt.scaling_lr
+            elif name == "rotation":
+                group["lr"] = opt.rotation_lr
+
+    if checkpoint and getattr(args, "start_checkpoint", None):
+        _reapply_lrs_after_restore()
+
+    debug_stats = bool(getattr(args, "debug_gaussian_stats", False)) and bool(checkpoint)
+    def _log_gaussian_stats(tag: str) -> None:
+        if not debug_stats:
+            return
+        with torch.no_grad():
+            scales = gaussians.get_scaling
+            if scales is None or scales.numel() == 0:
+                return
+            smax = torch.max(scales, dim=1).values if scales.dim() >= 2 else scales.reshape(-1)
+            smax = smax.reshape(-1)
+            scount = int(smax.numel())
+            if scount > 0:
+                sq = torch.quantile(smax, torch.tensor([0.5, 0.9, 0.95, 0.99], device=smax.device))
+                smax_max = float(torch.max(smax).item())
+            else:
+                sq = torch.tensor([0.0, 0.0, 0.0, 0.0], device=smax.device)
+                smax_max = 0.0
+
+            op = gaussians.get_opacity
+            op = op.reshape(-1)
+            ocount = int(op.numel())
+            if ocount > 0:
+                oq = torch.quantile(op, torch.tensor([0.5, 0.9, 0.95, 0.99], device=op.device))
+                op_max = float(torch.max(op).item())
+            else:
+                oq = torch.tensor([0.0, 0.0, 0.0, 0.0], device=op.device)
+                op_max = 0.0
+
+            msg = (
+                f"[INFO] GaussianStats {tag}: "
+                f"smax_count={scount} smax_p50={float(sq[0]):.6f} smax_p90={float(sq[1]):.6f} "
+                f"smax_p95={float(sq[2]):.6f} smax_p99={float(sq[3]):.6f} smax_max={smax_max:.6f} "
+                f"op_count={ocount} op_p50={float(oq[0]):.6f} op_p90={float(oq[1]):.6f} "
+                f"op_p95={float(oq[2]):.6f} op_p99={float(oq[3]):.6f} op_max={op_max:.6f}"
+            )
+            if tag == "after_restore":
+                lr_map = {}
+                for g in gaussians.optimizer.param_groups:
+                    n = g.get("name", None)
+                    if n is not None:
+                        lr_map[n] = g.get("lr", None)
+                if "xyz" in lr_map:
+                    msg += f" lr_xyz={lr_map['xyz']:.6f}"
+                if "f_dc" in lr_map:
+                    msg += f" lr_f_dc={lr_map['f_dc']:.6f}"
+                if "f_rest" in lr_map:
+                    msg += f" lr_f_rest={lr_map['f_rest']:.6f}"
+                if "opacity" in lr_map:
+                    msg += f" lr_opacity={lr_map['opacity']:.6f}"
+                if "scaling" in lr_map:
+                    msg += f" lr_scaling={lr_map['scaling']:.6f}"
+                if "rotation" in lr_map:
+                    msg += f" lr_rotation={lr_map['rotation']:.6f}"
+            print(msg)
+
+    _log_gaussian_stats("after_restore")
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -141,6 +263,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     ss_logged_densify_trigger = False
+    clamp_logged_rgb = False
     if getattr(args, "ss_enable", False):
         densify_possible = False
         try:
@@ -271,6 +394,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
+                if debug_stats and iteration == opt.iterations:
+                    _log_gaussian_stats("before_save")
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
@@ -286,6 +411,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         ss_logged_densify_trigger = True
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    if args.clamp_scale_after_densify and args.clamp_scale_max is not None:
+                        clamped_gauss, total, before_smax, after_smax = gaussians.clamp_scaling_max_(args.clamp_scale_max)
+                        if clamped_gauss > 0 and not clamp_logged_rgb:
+                            print(
+                                f"[INFO] ClampScaling rgb_after_densify: max_scale={args.clamp_scale_max} "
+                                f"clamped_gauss={clamped_gauss}/{total} before_smax={before_smax:.6f} after_smax={after_smax:.6f}"
+                            )
+                            clamp_logged_rgb = True
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -403,6 +536,11 @@ if __name__ == "__main__":
     parser.add_argument("--ss_aabb_margin", type=float, default=0.0)
     parser.add_argument("--ss_voxel_size", type=float, default=None)
     parser.add_argument("--ss_nn_dist_thr", type=float, default=None)
+    parser.add_argument("--ss_prune_before_thermal", action="store_true", default=False)
+    parser.add_argument("--debug_gaussian_stats", action="store_true", default=False)
+    parser.add_argument("--clamp_scale_max", type=float, default=None)
+    parser.add_argument("--clamp_scale_after_densify", action="store_true", default=False)
+    parser.add_argument("--thermal_reset_features", action="store_true", default=False)
 
     # Improved-4 (optional): pseudo-color thermal structure-gradient loss
     parser.add_argument("--t_struct_grad_w", type=float, default=0.0)
