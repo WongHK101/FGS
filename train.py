@@ -186,7 +186,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             elif name == "rotation":
                 group["lr"] = opt.rotation_lr
 
-    if checkpoint and getattr(args, "start_checkpoint", None):
+    if checkpoint and getattr(args, "start_checkpoint", None) and not getattr(args, "sgf_disable", False):
         _reapply_lrs_after_restore()
 
     debug_stats = bool(getattr(args, "debug_gaussian_stats", False)) and bool(checkpoint)
@@ -541,6 +541,7 @@ if __name__ == "__main__":
     parser.add_argument("--clamp_scale_max", type=float, default=None)
     parser.add_argument("--clamp_scale_after_densify", action="store_true", default=False)
     parser.add_argument("--thermal_reset_features", action="store_true", default=False)
+    parser.add_argument("--sgf_disable", action="store_true", default=False)
 
     # Improved-4 (optional): pseudo-color thermal structure-gradient loss
     parser.add_argument("--t_struct_grad_w", type=float, default=0.0)
