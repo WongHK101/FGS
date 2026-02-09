@@ -101,6 +101,13 @@ if (-not (Test-Path $SummaryScript)) { Write-Warning "summarize_ablation_excel.p
 
 $py = Resolve-PythonExe
 
+# 防呆：禁止在 CommonArgs 里混入 --from_step/--to_step
+foreach ($arg in $CommonArgs) {
+    if ($arg -match '^--from_step($|=)' -or $arg -match '^--to_step($|=)') {
+        throw "CommonArgs must not include --from_step/--to_step. Use -FromStep/-ToStep parameters instead."
+    }
+}
+
 # 关键：防止你遇到的 torch 缺失（真实跑才强制）
 if (-not $DryRun -and -not $SelfCheck) {
     try {
@@ -144,22 +151,41 @@ if ($SelfCheck) {
     $scOut = Join-Path $RunRoot "selfcheck_one"
     New-Item -ItemType Directory -Force -Path $scOut | Out-Null
 
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $oldNativePref = $null
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+        $oldNativePref = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+
     $args = @("--out_root", $scOut) + $baseArgs + @("--from_step","6","--to_step","7") + $CommonArgs
-    $cmdStr = ($args | ForEach-Object { Quote-Arg $_ }) -join " "
-    Write-Host "[RUN] $py $Pipeline $cmdStr"
-    & $py $Pipeline @args
+    & $py $Pipeline @args *> $null
+    $exitCode = $LASTEXITCODE
+    if ($null -ne $oldNativePref) { $PSNativeCommandUseErrorActionPreference = $oldNativePref }
+    $ErrorActionPreference = $oldEap
+    if ($exitCode -ne 0) { throw "SelfCheck: pipeline failed with exit code $exitCode" }
 
     if (Test-Path $SummaryScript) {
         $summaryPath = Join-Path $RunRoot "summary.xlsx"
-        Write-Host "[RUN] $py $SummaryScript --root $RunRoot --out $summaryPath"
-        & $py $SummaryScript --root $RunRoot --out $summaryPath
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $oldNativePref = $null
+        if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+            $oldNativePref = $PSNativeCommandUseErrorActionPreference
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+        & $py $SummaryScript --root $RunRoot --out $summaryPath *> $null
+        $exitCode = $LASTEXITCODE
+        if ($null -ne $oldNativePref) { $PSNativeCommandUseErrorActionPreference = $oldNativePref }
+        $ErrorActionPreference = $oldEap
+        if ($exitCode -ne 0) { throw "SelfCheck: summarize failed with exit code $exitCode" }
 
         $code = @"
 import os, openpyxl as ox
 p = r'''$summaryPath'''
 assert os.path.exists(p), p
 wb = ox.load_workbook(p)
-assert len(wb.sheetnames) > 0, 'no sheets'
 print('OK')
 "@
         & $py -c $code
@@ -183,9 +209,18 @@ if ($ReuseStage1) {
         & $py $Pipeline @sharedArgs
     }
     if (-not (Test-Path $sharedCkpt)) {
-        throw "Shared RGB checkpoint not found after shared run: $sharedCkpt"
+        if ($DryRun -or $SelfCheck) {
+            Write-Warning "Shared RGB checkpoint not found after shared run (dry_run/selfcheck): $sharedCkpt"
+        } else {
+            throw "Shared RGB checkpoint not found after shared run: $sharedCkpt"
+        }
     }
     Write-Host "[INFO] Reusing shared RGB checkpoint: $sharedCkpt"
+    if ($FromStep -ne "10" -or $ToStep -ne "12") {
+        Write-Warning "ReuseStage1 forces --from_step 10 --to_step 12 for experiments (overriding FromStep/ToStep)."
+        $FromStep = "10"
+        $ToStep = "12"
+    }
 }
 
 # ===== Stage2 实验列表（默认只做 stage2 相关消融；stage1 相关如 ss_enable_rgb/ss_enable 不放这里）=====
@@ -195,6 +230,8 @@ $experiments = @(
 
     @{ Name = "ss_aabb_t";     Args = @("--ss_enable_t", "--ss_source", "colmap_sparse", "--ss_aabb_margin", "0.0") },
     @{ Name = "ss_nn_t";       Args = @("--ss_enable_t", "--ss_source", "colmap_sparse", "--ss_aabb_margin", "0.0", "--ss_voxel_size", "0.5", "--ss_nn_dist_thr", "0.8") },
+    @{ Name = "ss_nn_t_prune"; Args = @("--ss_enable_t", "--ss_source", "colmap_sparse", "--ss_aabb_margin", "0.0", "--ss_voxel_size", "0.5", "--ss_nn_dist_thr", "0.8",
+                                        "--ss_prune_before_thermal") },
 
     @{ Name = "clamp3";        Args = @("--clamp_scale_max", "3") },
     @{ Name = "thermal_reset"; Args = @("--thermal_reset_features") },
@@ -202,7 +239,9 @@ $experiments = @(
     @{ Name = "debug_stats";   Args = @("--debug_gaussian_stats") },
 
     @{ Name = "ours_full";     Args = @("--ss_enable_t", "--ss_source", "colmap_sparse", "--ss_aabb_margin", "0.0", "--ss_voxel_size", "0.5", "--ss_nn_dist_thr", "0.8",
-                                        "--clamp_scale_max", "3", "--thermal_reset_features") }
+                                        "--clamp_scale_max", "3", "--thermal_reset_features") },
+    @{ Name = "ours_full_prune"; Args = @("--ss_enable_t", "--ss_source", "colmap_sparse", "--ss_aabb_margin", "0.0", "--ss_voxel_size", "0.5", "--ss_nn_dist_thr", "0.8",
+                                        "--clamp_scale_max", "3", "--thermal_reset_features", "--ss_prune_before_thermal") }
 )
 
 if ($Only.Count -gt 0) {

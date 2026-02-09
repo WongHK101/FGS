@@ -36,6 +36,7 @@ import argparse
 import math
 import json
 import os
+import csv
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,16 @@ def ensure_dir(p: Path) -> None:
 
 def exists_nonempty_dir(p: Path) -> bool:
     return p.exists() and p.is_dir() and any(p.iterdir())
+
+def write_csv(path: str, rows: List[Dict]) -> None:
+    if not rows:
+        return
+    keys = list(rows[0].keys())
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
 
 def _dir_size_bytes(p: Path) -> int:
     total = 0
@@ -463,13 +474,31 @@ class CropCandidate:
     rgb_dir: Path
     count: int
     mean: Dict[str, Optional[float]]
+    std: Dict[str, Optional[float]]
 
-def pick_best_candidate(summary_all_json: Path, prefer: Tuple[str, ...] = ("edge_f1", "grad_ncc", "nmi", "edge_dice", "mi")) -> CropCandidate:
+def _to_float_or_none(v) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except Exception:
+        return None
+    if not math.isfinite(f):
+        return None
+    return f
+
+def pick_best_candidate(
+    summary_all_json: Path,
+    prefer: Tuple[str, ...] = ("edge_f1", "grad_ncc", "nmi", "edge_dice", "mi"),
+    mode: str = "legacy",
+    edge_f1_eps: float = 0.002,
+) -> CropCandidate:
     """
     Auto-pick best crop candidate from eval_crop_metrics summary_all.json.
 
-    Heuristic:
-      sort by preferred metrics (descending) in order; skip missing values.
+    Modes:
+      - legacy: sort by preferred metrics (descending), same as old behavior.
+      - robust: shortlist by edge_f1 margin, then rank with weighted normalized score.
     """
     obj = json.loads(summary_all_json.read_text(encoding="utf-8"))
     candidates = obj.get("candidates", [])
@@ -484,6 +513,7 @@ def pick_best_candidate(summary_all_json: Path, prefer: Tuple[str, ...] = ("edge
                 rgb_dir=Path(str(c.get("rgb_dir", ""))),
                 count=int(c.get("count", 0)),
                 mean=dict(c.get("mean", {})),
+                std=dict(c.get("std", {})),
             )
         )
 
@@ -494,12 +524,75 @@ def pick_best_candidate(summary_all_json: Path, prefer: Tuple[str, ...] = ("edge
     def key_fn(c: CropCandidate):
         ks = []
         for k in prefer:
-            v = c.mean.get(k, None)
+            v = _to_float_or_none(c.mean.get(k, None))
             ks.append(-1e30 if v is None else float(v))
         return tuple(ks)
 
-    parsed.sort(key=key_fn, reverse=True)
-    return parsed[0]
+    if mode == "legacy":
+        parsed.sort(key=key_fn, reverse=True)
+        return parsed[0]
+
+    if mode != "robust":
+        raise ValueError(f"Unknown auto-pick mode: {mode}")
+
+    # Robust mode:
+    # 1) keep candidates close to best edge_f1
+    # 2) combine multiple metrics by weighted normalized score
+    edge_vals = [_to_float_or_none(c.mean.get("edge_f1")) for c in parsed]
+    edge_vals = [v for v in edge_vals if v is not None]
+    shortlist = parsed
+    if edge_vals:
+        edge_best = max(edge_vals)
+        shortlist = []
+        for c in parsed:
+            v = _to_float_or_none(c.mean.get("edge_f1"))
+            if v is not None and v >= (edge_best - float(edge_f1_eps)):
+                shortlist.append(c)
+        if not shortlist:
+            shortlist = parsed
+
+    weights = {
+        "grad_ncc": 0.30,
+        "grad_ssim": 0.25,
+        "edge_f1": 0.20,
+        "nmi": 0.15,
+        "mi": 0.10,
+    }
+    metric_stats: Dict[str, Tuple[float, float]] = {}
+    for k in weights.keys():
+        vals = []
+        for c in shortlist:
+            v = _to_float_or_none(c.mean.get(k))
+            if v is not None:
+                vals.append(v)
+        if vals:
+            metric_stats[k] = (min(vals), max(vals))
+
+    def robust_key_fn(c: CropCandidate):
+        score = 0.0
+        total_w = 0.0
+        for k, w in weights.items():
+            v = _to_float_or_none(c.mean.get(k))
+            if v is None:
+                continue
+            if k not in metric_stats:
+                continue
+            lo, hi = metric_stats[k]
+            if hi - lo <= 1e-12:
+                vn = 0.5
+            else:
+                vn = (v - lo) / (hi - lo)
+            score += float(w) * float(vn)
+            total_w += float(w)
+        if total_w > 1e-12:
+            score /= total_w
+        else:
+            score = -1e30
+        # tie-break by legacy ordering
+        return (score,) + key_fn(c)
+
+    shortlist.sort(key=robust_key_fn, reverse=True)
+    return shortlist[0]
 
 
 # ----------------------------
@@ -519,7 +612,11 @@ def main() -> None:
     ap.add_argument("--colmap", default="colmap", help="COLMAP executable (default: colmap). Can be colmap.exe / colmap.bat / full path.")
     ap.add_argument("--exiftool", default="exiftool", help="ExifTool executable (default: exiftool)")
 
-    ap.add_argument("--align", default="auto", choices=["auto", "fit", "exif"], help="Which aligned RGB to use for COLMAP (default: auto)")
+    ap.add_argument("--align", default="auto", choices=["auto", "fit", "exif", "ecc", "dual"], help="Which aligned RGB to use for COLMAP (default: auto)")
+    ap.add_argument("--auto_pick_mode", default="robust", choices=["legacy", "robust"],
+                    help="Auto-pick strategy when --align auto (default: legacy)")
+    ap.add_argument("--auto_pick_edge_f1_eps", type=float, default=0.002,
+                    help="Robust auto-pick: keep candidates within this edge_f1 margin (default: 0.002)")
     ap.add_argument("--comparison", action="store_true", help="Enable cfr.py --comparison (writes side-by-side visuals; slower)")
     ap.add_argument("--link_mode", default="copy", choices=["copy", "hardlink", "symlink"],
                     help="How to put aligned images into data_root/input (default: copy). hardlink is fastest if same disk.")
@@ -628,6 +725,10 @@ def main() -> None:
                     help="Thermal-only: prune outside sparse support after restore (default: off)")
     ap.add_argument("--clamp_scale_max", type=float, default=None,
                     help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
+    ap.add_argument("--clamp_scale_max_rgb", type=float, default=None,
+                    help="RGB-only: clamp max gaussian scale after densify (default: None)")
+    ap.add_argument("--clamp_scale_max_t", type=float, default=None,
+                    help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
     ap.add_argument("--thermal_reset_features", action="store_true", default=False,
                     help="Thermal-only: reset SH features after restore/prune/clamp (default: off)")
     ap.add_argument("--debug_gaussian_stats", action="store_true", default=False,
@@ -689,6 +790,13 @@ def main() -> None:
 
     ss_train_extra: List[str] = _build_ss_args_for_stage(ss_enable_rgb)
     ss_train2_extra: List[str] = _build_ss_args_for_stage(ss_enable_t)
+
+    clamp_effective_rgb = getattr(args, "clamp_scale_max_rgb", None)
+    clamp_effective_t = args.clamp_scale_max_t if args.clamp_scale_max_t is not None else args.clamp_scale_max
+
+    if (not getattr(args, "sgf_disable", False)) and ss_enable_t and (not getattr(args, "ss_prune_before_thermal", False)):
+        eprint("[WARN] SGF on + ss_enable_t detected, but ss_prune_before_thermal is off. "
+               "SS gating in thermal may not take effect; consider --ss_prune_before_thermal for lightening/prune.")
     # Improvement-4 forwarding args (only forwarded when enabled; safe no-op otherwise)
     tstruct_train_extra: List[str] = _build_tstruct_train_args(args)
     def _maybe_raise_file_not_found(msg: str) -> None:
@@ -964,6 +1072,10 @@ def main() -> None:
                 "ss_nn_dist_thr": getattr(args, "ss_nn_dist_thr", None),
                 "ss_prune_before_thermal": bool(getattr(args, "ss_prune_before_thermal", False)),
                 "clamp_scale_max": getattr(args, "clamp_scale_max", None),
+                "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
+                "clamp_scale_max_t": getattr(args, "clamp_scale_max_t", None),
+                "clamp_effective_rgb": clamp_effective_rgb,
+                "clamp_effective_t": clamp_effective_t,
                 "thermal_reset_features": bool(getattr(args, "thermal_reset_features", False)),
                 "sgf_disable": bool(getattr(args, "sgf_disable", False)),
                 "debug_gaussian_stats": bool(getattr(args, "debug_gaussian_stats", False)),
@@ -1016,6 +1128,11 @@ def main() -> None:
                     "ss_enable": bool(getattr(args, "ss_enable", False)),
                     "ss_enable_rgb": bool(getattr(args, "ss_enable_rgb", False)),
                     "ss_enable_t": bool(getattr(args, "ss_enable_t", False)),
+                    "clamp_scale_max": getattr(args, "clamp_scale_max", None),
+                    "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
+                    "clamp_scale_max_t": getattr(args, "clamp_scale_max_t", None),
+                    "clamp_effective_rgb": clamp_effective_rgb,
+                    "clamp_effective_t": clamp_effective_t,
                 },
             },
             "steps": _json_safe(profile_steps),
@@ -1065,17 +1182,30 @@ def main() -> None:
     # Expected CFR outputs
     cand_fit = fit_dir / "image" / "image-fit"
     cand_exif = fit_dir / "image" / "image-exif"
+    cand_ecc = fit_dir / "image" / "image-ecc"
+    cand_dual = fit_dir / "image" / "image-dual"
+    th_dual = fit_dir / "thermal" / "thermal-dual"
 
     # -------- 1) CFR
     if args.clean_fit and fit_dir.exists():
         eprint(f"[INFO] Cleaning fit dir: {fit_dir}")
         shutil.rmtree(fit_dir)
 
-    cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir), "--align", "both", "--stage", "both" ,"--comparison"]
+    cfr_align = "both"
+    if args.align == "ecc":
+        cfr_align = "all"
+    cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir),
+               "--align", cfr_align, "--stage", "both", "--dual", "--comparison"]
     if args.comparison:
         cfr_cmd.append("--comparison")
 
-    cfr_outputs_ok = cand_fit.exists() and cand_exif.exists() and (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
+    cfr_outputs_ok = (
+        cand_fit.exists() and cand_exif.exists() and cand_dual.exists() and th_dual.exists() and
+        (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0) and
+        (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+    )
+    if args.align == "ecc":
+        cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
     if not _in_step_range(1):
         eprint("[SKIP] 01_cfr (outside selected step range)")
         _record_step("01_cfr", "skip_range", cfr_cmd, outputs_ok=cfr_outputs_ok)
@@ -1087,19 +1217,36 @@ def main() -> None:
             ensure_dir(fit_dir)
             maybe_run(cfr_cmd, cwd=gs_root, step_name="01_cfr")
             # re-evaluate
-            cfr_outputs_ok = cand_fit.exists() and cand_exif.exists() and (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
+            cfr_outputs_ok = (
+                cand_fit.exists() and cand_exif.exists() and cand_dual.exists() and th_dual.exists() and
+                (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0) and
+                (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+            )
+            if args.align == "ecc":
+                cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
             if not cfr_outputs_ok:
-                _maybe_raise_file_not_found(f"Expected cfr outputs missing. Need both:\n  {cand_fit}\n  {cand_exif}")
+                need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}\n  {cand_exif}\n  {cand_dual}\n  {th_dual}"
+                if args.align == "ecc":
+                    need_msg += f"\n  {cand_ecc}"
+                _maybe_raise_file_not_found(need_msg)
             _record_step("01_cfr", "run", cfr_cmd, outputs_ok=cfr_outputs_ok)
             write_marker(marker_path(state_dir, "01_cfr"), "01_cfr", cfr_cmd, cwd=gs_root)
 
-    # -------- 2) Evaluate crop candidates (fit + exif)
+    # -------- 2) Evaluate crop candidates (fit + exif + dual)
     ensure_dir(metrics_out)
     summary_all = metrics_out / "summary_all.json"
+    metrics_rgb = metrics_out / "crop_rgb"
+    metrics_dual = metrics_out / "crop_dual"
+    ensure_dir(metrics_rgb)
+    ensure_dir(metrics_dual)
     eval_cmd_base = [py, "eval_crop_metrics.py", "--th_dir", str(th_dir),
                      "--rgb_dir", str(cand_fit), "--rgb_dir", str(cand_exif),
                      "--tag", "fit", "--tag", "exif",
-                     "--out_dir", str(metrics_out)]
+                     "--out_dir", str(metrics_rgb)]
+    eval_cmd_dual = [py, "eval_crop_metrics.py", "--th_dir", str(th_dual),
+                     "--rgb_dir", str(cand_dual),
+                     "--tag", "dual",
+                     "--out_dir", str(metrics_dual)]
     eval_outputs_ok = summary_all.exists() and summary_all.stat().st_size > 50
 
     if not _in_step_range(2):
@@ -1115,10 +1262,48 @@ def main() -> None:
         else:
             # Try with --ssim first (if available), then fallback without it.
             try:
-                maybe_run(eval_cmd_base + ["--ssim"], cwd=gs_root, step_name="02_eval_crop")
+                maybe_run(eval_cmd_base + ["--ssim"], cwd=gs_root, step_name="02_eval_crop_rgb")
             except subprocess.CalledProcessError:
                 eprint("[WARN] eval_crop_metrics.py failed with --ssim. Retrying without --ssim ...")
-                maybe_run(eval_cmd_base, cwd=gs_root, step_name="02_eval_crop")
+                maybe_run(eval_cmd_base, cwd=gs_root, step_name="02_eval_crop_rgb")
+
+            try:
+                maybe_run(eval_cmd_dual + ["--ssim"], cwd=gs_root, step_name="02_eval_crop_dual")
+            except subprocess.CalledProcessError:
+                eprint("[WARN] eval_crop_metrics.py (dual) failed with --ssim. Retrying without --ssim ...")
+                maybe_run(eval_cmd_dual, cwd=gs_root, step_name="02_eval_crop_dual")
+
+            # merge summaries into metrics_out/summary_all.json (+ csv)
+            try:
+                rgb_all = json.loads((metrics_rgb / "summary_all.json").read_text(encoding="utf-8"))
+                dual_all = json.loads((metrics_dual / "summary_all.json").read_text(encoding="utf-8"))
+                cands = []
+                for obj in (rgb_all, dual_all):
+                    for c in obj.get("candidates", []):
+                        if c and isinstance(c, dict):
+                            cands.append(c)
+                combined = {"candidates": cands}
+                summary_all.write_text(json.dumps(combined, indent=2, ensure_ascii=False), encoding="utf-8")
+
+                # write summary_all.csv
+                metrics_keys = ["mi", "nmi", "grad_ncc", "edge_dice", "edge_f1"]
+                has_ssim = any(("grad_ssim" in c.get("mean", {})) for c in cands if isinstance(c, dict))
+                if has_ssim:
+                    metrics_keys.append("grad_ssim")
+                rows = []
+                for c in cands:
+                    row = {"tag": c.get("tag"), "count": c.get("count"), "rgb_dir": c.get("rgb_dir")}
+                    mean = c.get("mean", {}) if isinstance(c, dict) else {}
+                    std = c.get("std", {}) if isinstance(c, dict) else {}
+                    for k in metrics_keys:
+                        row[f"{k}_mean"] = mean.get(k)
+                        row[f"{k}_std"] = std.get(k)
+                    rows.append(row)
+                out_all_csv = metrics_out / "summary_all.csv"
+                write_csv(str(out_all_csv), rows)
+            except Exception as e:
+                eprint(f"[WARN] Failed to merge crop metrics: {e}")
+
             eval_outputs_ok = summary_all.exists() and summary_all.stat().st_size > 50
             if not eval_outputs_ok:
                 _maybe_raise_file_not_found(f"summary_all.json not found or empty: {summary_all}")
@@ -1132,11 +1317,29 @@ def main() -> None:
     elif args.align == "exif":
         chosen_tag = "exif"
         chosen_dir = cand_exif
+    elif args.align == "ecc":
+        chosen_tag = "ecc"
+        chosen_dir = cand_ecc
+    elif args.align == "dual":
+        chosen_tag = "dual"
+        chosen_dir = cand_dual
     else:
-        best = pick_best_candidate(summary_all)
+        best = pick_best_candidate(
+            summary_all,
+            mode=args.auto_pick_mode,
+            edge_f1_eps=args.auto_pick_edge_f1_eps,
+        )
         chosen_tag = best.tag
         chosen_dir = best.rgb_dir
-        eprint(f"[INFO] Auto-picked candidate: {chosen_tag}  (from {summary_all})")
+        eprint(f"[INFO] Auto-picked candidate: {chosen_tag}  (mode={args.auto_pick_mode}, from {summary_all})")
+
+    th_dir_for_ud = th_dir
+    if chosen_tag == "dual":
+        if th_dual.exists() and (len(list_images(th_dual)) > 0):
+            th_dir_for_ud = th_dual
+            eprint(f"[INFO] Using dual thermal for undistort: {th_dir_for_ud}")
+        else:
+            eprint(f"[WARN] dual selected but thermal-dual missing: {th_dual}. Fallback to original thermal.")
 
     # Prepare input dir
     if args.clean_input and input_dir.exists():
@@ -1252,6 +1455,8 @@ def main() -> None:
     # Forward sparse support opts only when enabled for RGB stage.
     if ss_train_extra:
         train1_cmd.extend(ss_train_extra)
+    if clamp_effective_rgb is not None:
+        train1_cmd.extend(["--clamp_scale_max", str(clamp_effective_rgb), "--clamp_scale_after_densify"])
 
     train1_outputs_ok = ckpt_rgb.exists()
     if not _in_step_range(5):
@@ -1320,7 +1525,7 @@ def main() -> None:
 
     undistort_cmd = [
         str(args.colmap), "image_undistorter",
-        "--image_path", str(th_dir),
+        "--image_path", str(th_dir_for_ud),
         "--input_path", str(sparse_aligned),
         "--output_path", str(thermal_ud),
         "--output_type", "COLMAP",
@@ -1334,8 +1539,8 @@ def main() -> None:
                 f"Expected: {sparse_aligned} (with cameras.bin/txt).\n"
                 "Run with --from_step 4 (or earlier), or fix your COLMAP outputs."
             )
-        if not th_dir.exists():
-            _maybe_raise_file_not_found(f"Thermal directory not found: {th_dir}")
+        if not th_dir_for_ud.exists():
+            _maybe_raise_file_not_found(f"Thermal directory not found: {th_dir_for_ud}")
 
     if not _in_step_range(8):
         eprint("[SKIP] 08_undistort_thermal (outside selected step range)")
@@ -1420,8 +1625,8 @@ def main() -> None:
         train2_cmd.extend(ss_train2_extra)
     if args.ss_prune_before_thermal:
         train2_cmd.append("--ss_prune_before_thermal")
-    if args.clamp_scale_max is not None:
-        train2_cmd.extend(["--clamp_scale_max", str(args.clamp_scale_max)])
+    if clamp_effective_t is not None:
+        train2_cmd.extend(["--clamp_scale_max", str(clamp_effective_t)])
     if args.thermal_reset_features:
         train2_cmd.append("--thermal_reset_features")
     if args.debug_gaussian_stats:

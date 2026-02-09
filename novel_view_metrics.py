@@ -117,15 +117,6 @@ def _spike_score(edge_mag: np.ndarray, thr: float = 0.1) -> float:
     return float(spike_pixels) / float(ds.size)
 
 
-def _holes_stats(mask: np.ndarray) -> Tuple[float, float]:
-    ds = mask[::4, ::4]
-    comps = _connected_components(ds)
-    if not comps:
-        return 0.0, 0.0
-    areas = [float(a) for a, _, _ in comps]
-    return float(np.mean(areas)), float(np.max(areas))
-
-
 def _render_novel_views(scene: Scene, gaussians: GaussianModel, pipe, bg: int, n: int, out_dir: Path) -> List[np.ndarray]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
@@ -202,8 +193,6 @@ def main() -> None:
 
     bg_leaks: List[float] = []
     spike_scores: List[float] = []
-    hole_means: List[float] = []
-    hole_maxs: List[float] = []
     grays: List[np.ndarray] = []
 
     for img in frames:
@@ -212,13 +201,6 @@ def main() -> None:
         edge_mag = _sobel_mag(gray)
         bg_leaks.append(_bg_leak_ratio(img, args.bg))
         spike_scores.append(_spike_score(edge_mag, thr=args.edge_thr))
-        if args.bg == 0:
-            hole_mask = np.max(img, axis=2) <= (3.0 / 255.0)
-        else:
-            hole_mask = np.min(img, axis=2) >= (1.0 - 3.0 / 255.0)
-        hm, hx = _holes_stats(hole_mask)
-        hole_means.append(hm)
-        hole_maxs.append(hx)
 
     flickers: List[float] = []
     for i in range(1, len(grays)):
@@ -231,8 +213,6 @@ def main() -> None:
         "BgLeakRatio_mean": float(np.mean(bg_leaks)) if bg_leaks else 0.0,
         "SpikeScore_mean": float(np.mean(spike_scores)) if spike_scores else 0.0,
         "TemporalFlicker_mean": float(np.mean(flickers)) if flickers else 0.0,
-        "OpacityHoles_mean_area": float(np.mean(hole_means)) if hole_means else 0.0,
-        "OpacityHoles_max_area": float(np.mean(hole_maxs)) if hole_maxs else 0.0,
         "out_dir": str(out_dir),
     }
 

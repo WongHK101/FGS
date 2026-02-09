@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import shutil
 import subprocess
@@ -42,6 +43,9 @@ try:
     import cv2  # type: ignore
 except Exception as e:
     raise RuntimeError("opencv-python is required. Install: pip install opencv-python") from e
+
+from cfr_features import build_structure
+from cfr_quality import grad_ncc as quality_grad_ncc, edge_f1 as quality_edge_f1, combine_quality as quality_combine
 
 try:
     from PIL import Image, ImageOps
@@ -681,6 +685,109 @@ def to_gray_for_match(bgr: np.ndarray) -> np.ndarray:
     return mag.astype(np.uint8)
 
 
+def build_sobel_mag_f32(bgr: np.ndarray) -> np.ndarray:
+    return build_structure(bgr, mode="sobel_mag")
+
+
+def _mat33_from_affine(aff: np.ndarray) -> np.ndarray:
+    if aff.shape == (3, 3):
+        return aff.astype(np.float32)
+    if aff.shape == (2, 3):
+        out = np.eye(3, dtype=np.float32)
+        out[:2, :3] = aff.astype(np.float32)
+        return out
+    raise ValueError(f"Invalid affine shape: {aff.shape}")
+
+
+def _normalize_homography(H: np.ndarray) -> np.ndarray:
+    H = H.astype(np.float32)
+    if abs(float(H[2, 2])) > 1e-8:
+        H = H / float(H[2, 2])
+    return H
+
+
+def _warp_gray_with_h(gray_f32: np.ndarray, H: np.ndarray, out_size: Tuple[int, int]) -> np.ndarray:
+    H33 = _mat33_from_affine(H)
+    return cv2.warpPerspective(gray_f32, H33, out_size, flags=cv2.INTER_LINEAR)
+
+
+def _sample_grid_points(w: int, h: int, grid: int = 5) -> np.ndarray:
+    xs = np.linspace(0.0, float(w - 1), grid, dtype=np.float32)
+    ys = np.linspace(0.0, float(h - 1), grid, dtype=np.float32)
+    xv, yv = np.meshgrid(xs, ys)
+    pts = np.stack([xv.reshape(-1), yv.reshape(-1)], axis=1)
+    return pts.astype(np.float32)
+
+
+def fit_sfm_safe_similarity_from_h(
+    H: np.ndarray,
+    rgb_w: int,
+    rgb_h: int,
+    out_w: int,
+    out_h: int,
+    theta_deg: float,
+) -> Tuple[np.ndarray, float, float, float]:
+    theta = math.radians(float(theta_deg))
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+
+    pts = _sample_grid_points(rgb_w, rgb_h, grid=5).reshape(-1, 1, 2)
+    try:
+        pts_t = cv2.perspectiveTransform(pts, _mat33_from_affine(H))
+    except Exception:
+        pts_t = pts.copy()
+
+    A = []
+    b = []
+    for i in range(pts.shape[0]):
+        x, y = float(pts[i, 0, 0]), float(pts[i, 0, 1])
+        xt, yt = float(pts_t[i, 0, 0]), float(pts_t[i, 0, 1])
+        u = cos_t * x - sin_t * y
+        v = sin_t * x + cos_t * y
+        A.append([u, 1.0, 0.0])
+        b.append(xt)
+        A.append([v, 0.0, 1.0])
+        b.append(yt)
+
+    A = np.array(A, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
+    try:
+        sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+        s = float(sol[0])
+        tx = float(sol[1])
+        ty = float(sol[2])
+    except Exception:
+        s, tx, ty = 1.0, 0.0, 0.0
+
+    if not (math.isfinite(s) and math.isfinite(tx) and math.isfinite(ty)) or s <= 1e-8:
+        s, tx, ty = 1.0, 0.0, 0.0
+
+    S = np.array([
+        [s * cos_t, -s * sin_t, tx],
+        [s * sin_t,  s * cos_t, ty],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    return S, s, tx, ty
+
+
+def crop_box_from_similarity(
+    s: float,
+    tx: float,
+    ty: float,
+    out_w: int,
+    out_h: int,
+) -> Tuple[int, int, int, int]:
+    if s <= 1e-8 or not math.isfinite(s):
+        return 0, 0, out_w, out_h
+    crop_w = float(out_w) / float(s)
+    crop_h = float(out_h) / float(s)
+    x0 = -float(tx) / float(s)
+    y0 = -float(ty) / float(s)
+    x1 = x0 + crop_w
+    y1 = y0 + crop_h
+    return int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))
+
+
 def crop_box_from_fov(
     rgb_w: int, rgb_h: int, th_w: int, th_h: int,
     fov_frac_w: float,
@@ -704,6 +811,24 @@ def crop_box_from_fov(
     return x0, y0, x1, y1
 
 
+def homography_from_crop_box(
+    box: Tuple[int, int, int, int],
+    out_w: int,
+    out_h: int,
+) -> np.ndarray:
+    x0, y0, x1, y1 = box
+    crop_w = max(1.0, float(x1 - x0))
+    crop_h = max(1.0, float(y1 - y0))
+    sx = float(out_w) / crop_w
+    sy = float(out_h) / crop_h
+    H = np.array([
+        [sx, 0.0, -sx * float(x0)],
+        [0.0, sy, -sy * float(y0)],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    return H
+
+
 def crop_with_pad(bgr: np.ndarray, box: Tuple[int, int, int, int]) -> np.ndarray:
     x0, y0, x1, y1 = box
     h, w = bgr.shape[:2]
@@ -725,6 +850,42 @@ def crop_with_pad(bgr: np.ndarray, box: Tuple[int, int, int, int]) -> np.ndarray
     return bgr[y0:y1, x0:x1]
 
 
+def safe_crop_with_pad(
+    bgr: np.ndarray,
+    box: Tuple[int, int, int, int],
+    max_pad: int,
+    max_pixels: int,
+) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    x0, y0, x1, y1 = box
+    h, w = bgr.shape[:2]
+    pad_l = max(0, -x0)
+    pad_t = max(0, -y0)
+    pad_r = max(0, x1 - w)
+    pad_b = max(0, y1 - h)
+    if max(pad_l, pad_r, pad_t, pad_b) > max_pad:
+        return None, "pad_too_large"
+    padded_w = w + pad_l + pad_r
+    padded_h = h + pad_t + pad_b
+    if padded_w * padded_h > max_pixels:
+        return None, "pad_area_too_large"
+    try:
+        if pad_l or pad_t or pad_r or pad_b:
+            bgr = cv2.copyMakeBorder(bgr, pad_t, pad_b, pad_l, pad_r,
+                                     borderType=cv2.BORDER_CONSTANT, value=(0, 0, 0))
+            x0 += pad_l
+            x1 += pad_l
+            y0 += pad_t
+            y1 += pad_t
+        x0 = max(0, min(x0, bgr.shape[1] - 1))
+        y0 = max(0, min(y0, bgr.shape[0] - 1))
+        x1 = max(x0 + 1, min(x1, bgr.shape[1]))
+        y1 = max(y0 + 1, min(y1, bgr.shape[0]))
+        return bgr[y0:y1, x0:x1], None
+    except cv2.error as e:
+        msg = str(e).splitlines()[0] if str(e).splitlines() else str(e)
+        return None, f"cv2_error: {msg}"
+
+
 def ncc_score(a: np.ndarray, b: np.ndarray) -> float:
     af = a.astype(np.float32)
     bf = b.astype(np.float32)
@@ -743,6 +904,165 @@ class FitResult:
     ncc: Optional[float] = None
     cx_off_frac: Optional[float] = None
     cy_off_frac: Optional[float] = None
+
+
+@dataclass
+class EccResult:
+    ok: bool
+    reason: str
+    h_raw: Optional[np.ndarray] = None
+    ecc_score: Optional[float] = None
+    warp_residual: Optional[np.ndarray] = None
+
+
+@dataclass
+class RunningStat:
+    n: int = 0
+    mean: float = 0.0
+    m2: float = 0.0
+    min_v: Optional[float] = None
+    max_v: Optional[float] = None
+
+    def add(self, x: Optional[float]) -> None:
+        if x is None:
+            return
+        try:
+            v = float(x)
+        except Exception:
+            return
+        if not math.isfinite(v):
+            return
+        self.n += 1
+        if self.min_v is None or v < self.min_v:
+            self.min_v = v
+        if self.max_v is None or v > self.max_v:
+            self.max_v = v
+        delta = v - self.mean
+        self.mean += delta / self.n
+        delta2 = v - self.mean
+        self.m2 += delta * delta2
+
+    def as_dict(self) -> Dict[str, Optional[float]]:
+        if self.n <= 1:
+            std = 0.0 if self.n == 1 else None
+        else:
+            std = float(math.sqrt(self.m2 / float(self.n)))
+        return {
+            "count": int(self.n),
+            "mean": float(self.mean) if self.n > 0 else None,
+            "std": std,
+            "min": float(self.min_v) if self.min_v is not None else None,
+            "max": float(self.max_v) if self.max_v is not None else None,
+        }
+
+
+def select_even_indices(total: int, max_count: int) -> List[int]:
+    if total <= 0:
+        return []
+    if max_count <= 0 or max_count >= total:
+        return list(range(total))
+    xs = np.linspace(0, total - 1, max_count)
+    idx = sorted({int(round(x)) for x in xs})
+    return idx
+
+
+def _project_corners(H: np.ndarray, w: int, h: int) -> Optional[np.ndarray]:
+    pts = np.array([[0.0, 0.0], [float(w - 1), 0.0], [float(w - 1), float(h - 1)], [0.0, float(h - 1)]],
+                   dtype=np.float32).reshape(-1, 1, 2)
+    try:
+        pts_t = cv2.perspectiveTransform(pts, _mat33_from_affine(H))
+    except Exception:
+        return None
+    arr = pts_t.reshape(-1, 2)
+    if not np.all(np.isfinite(arr)):
+        return None
+    return arr
+
+
+def _quality_for_h(
+    rgb_bgr: np.ndarray,
+    th_bgr: np.ndarray,
+    H: np.ndarray,
+    structure_mode: str,
+) -> Tuple[Optional[float], Optional[float]]:
+    try:
+        th_struct = build_structure(th_bgr, mode=structure_mode)
+        rgb_struct = build_structure(rgb_bgr, mode=structure_mode)
+        th_h, th_w = th_bgr.shape[:2]
+        rgb_warp = _warp_gray_with_h(rgb_struct, H, (th_w, th_h))
+        grad_ncc = quality_grad_ncc(th_struct, rgb_warp)
+        edge_f1 = quality_edge_f1(th_struct, rgb_warp)
+        return grad_ncc, edge_f1
+    except Exception:
+        return None, None
+
+
+def _phase_corr_shift(
+    a: np.ndarray,
+    b: np.ndarray,
+    max_shift: float = 3.0,
+    min_resp: float = 0.02,
+    roi_margin_frac: float = 0.10,
+) -> Optional[Tuple[float, float, float]]:
+    try:
+        h, w = a.shape[:2]
+        mx = int(round(w * float(roi_margin_frac)))
+        my = int(round(h * float(roi_margin_frac)))
+        if mx * 2 >= w or my * 2 >= h:
+            return None
+
+        a_roi = a[my:h - my, mx:w - mx].astype(np.float32)
+        b_roi = b[my:h - my, mx:w - mx].astype(np.float32)
+        if a_roi.size <= 0 or b_roi.size <= 0:
+            return None
+
+        win = cv2.createHanningWindow((a_roi.shape[1], a_roi.shape[0]), cv2.CV_32F)
+        (dx, dy), resp = cv2.phaseCorrelate(a_roi, b_roi, win)
+        if not (math.isfinite(dx) and math.isfinite(dy) and math.isfinite(resp)):
+            return None
+        if float(resp) < float(min_resp):
+            return None
+        if abs(float(dx)) > float(max_shift) or abs(float(dy)) > float(max_shift):
+            return None
+        return float(dx), float(dy), float(resp)
+    except Exception:
+        return None
+
+
+def _select_global_h_by_corner_median(cands: List[Dict[str, object]], rgb_w: int, rgb_h: int) -> Optional[Dict[str, object]]:
+    corner_list = []
+    for c in cands:
+        H = c.get("H")
+        if H is None:
+            continue
+        corners = _project_corners(H, rgb_w, rgb_h)
+        if corners is None:
+            continue
+        c["corners"] = corners
+        corner_list.append(corners)
+    if not corner_list:
+        return None
+    median_c = np.median(np.stack(corner_list, axis=0), axis=0)
+    usable = []
+    for c in cands:
+        corners = c.get("corners")
+        if corners is None:
+            continue
+        err = float(np.linalg.norm(corners - median_c))
+        c["corner_err"] = err
+        usable.append(c)
+    if not usable:
+        return None
+    def _score(item: Dict[str, object]) -> Tuple[float, float]:
+        err = float(item.get("corner_err", 1e9))
+        q = item.get("q_total")
+        try:
+            qv = float(q)  # type: ignore[arg-type]
+        except Exception:
+            qv = -1e9
+        return (err, -qv)
+    usable.sort(key=_score)
+    return usable[0]
 
 
 def estimate_fit_on_pair(
@@ -835,6 +1155,89 @@ def estimate_fit_on_pair(
     )
 
 
+def estimate_ecc_on_pair(
+    rgb_bgr: np.ndarray,
+    th_bgr: np.ndarray,
+    H_init: np.ndarray,
+    motion: str,
+    ecc_iter: int,
+    ecc_eps: float,
+    structure_mode: str,
+) -> EccResult:
+    th_h, th_w = th_bgr.shape[:2]
+
+    th_struct = build_structure(th_bgr, mode=structure_mode)
+    rgb_struct = build_structure(rgb_bgr, mode=structure_mode)
+
+    if float(np.std(th_struct)) < 1e-6 or float(np.std(rgb_struct)) < 1e-6:
+        return EccResult(ok=False, reason="low_texture")
+
+    def _run_ecc(template: np.ndarray, inp: np.ndarray, warp_init: np.ndarray, motion_type: int):
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(ecc_iter), float(ecc_eps))
+        try:
+            cc, warp = cv2.findTransformECC(template, inp, warp_init, motion_type, criteria)
+        except cv2.error as e:
+            msg = str(e).splitlines()[0] if str(e).splitlines() else str(e)
+            return None, f"cv2_error: {msg}"
+        except Exception as e:
+            return None, f"error: {e}"
+        return (float(cc), warp), None
+
+    motion = motion.lower().strip()
+    H_init33 = _mat33_from_affine(H_init)
+
+    # 1) Direct ECC on original images with H_init as initialization
+    if motion == "affine":
+        init_aff = H_init33[:2, :].astype(np.float32)
+        res, err = _run_ecc(th_struct, rgb_struct, init_aff, cv2.MOTION_AFFINE)
+        if res is not None:
+            cc, warp = res
+            warp33 = _mat33_from_affine(warp)
+            H_raw = _normalize_homography(warp33)
+            return EccResult(ok=True, reason="ok", h_raw=H_raw, ecc_score=cc, warp_residual=warp33)
+        last_err = err
+    else:
+        init_h = H_init33.astype(np.float32)
+        res, err = _run_ecc(th_struct, rgb_struct, init_h, cv2.MOTION_HOMOGRAPHY)
+        if res is not None:
+            cc, warp = res
+            warp33 = _mat33_from_affine(warp)
+            H_raw = _normalize_homography(warp33)
+            return EccResult(ok=True, reason="ok", h_raw=H_raw, ecc_score=cc, warp_residual=warp33)
+        last_err = err
+
+        # 2) Fallback: affine ECC if homography fails
+        init_aff = H_init33[:2, :].astype(np.float32)
+        res, err = _run_ecc(th_struct, rgb_struct, init_aff, cv2.MOTION_AFFINE)
+        if res is not None:
+            cc, warp = res
+            warp33 = _mat33_from_affine(warp)
+            H_raw = _normalize_homography(warp33)
+            return EccResult(ok=True, reason="fallback_affine", h_raw=H_raw, ecc_score=cc, warp_residual=warp33)
+        last_err = err
+
+    # 3) Residual ECC on pre-warped image (legacy fallback)
+    rgb_init = _warp_gray_with_h(rgb_struct, H_init33, (th_w, th_h))
+    if motion == "affine":
+        res, err = _run_ecc(th_struct, rgb_init, np.eye(2, 3, dtype=np.float32), cv2.MOTION_AFFINE)
+        if res is not None:
+            cc, warp = res
+            warp33 = _mat33_from_affine(warp)
+            H_raw = _normalize_homography(warp33 @ H_init33)
+            return EccResult(ok=True, reason="fallback_residual", h_raw=H_raw, ecc_score=cc, warp_residual=warp33)
+        last_err = err
+    else:
+        res, err = _run_ecc(th_struct, rgb_init, np.eye(3, dtype=np.float32), cv2.MOTION_HOMOGRAPHY)
+        if res is not None:
+            cc, warp = res
+            warp33 = _mat33_from_affine(warp)
+            H_raw = _normalize_homography(warp33 @ H_init33)
+            return EccResult(ok=True, reason="fallback_residual", h_raw=H_raw, ecc_score=cc, warp_residual=warp33)
+        last_err = err
+
+    return EccResult(ok=False, reason=last_err or "ecc_failed")
+
+
 # ----------------------------
 # Visualization / montage
 # ----------------------------
@@ -869,7 +1272,9 @@ def overlay_thermal_rgb(th_bgr: np.ndarray, rgb_bgr: np.ndarray, alpha_th: float
 def draw_boxes_on_vis(
     vis_bgr: np.ndarray,
     fit_box: Tuple[int, int, int, int],
-    exif_box: Optional[Tuple[int, int, int, int]]
+    exif_box: Optional[Tuple[int, int, int, int]],
+    ecc_box: Optional[Tuple[int, int, int, int]],
+    dual_box: Optional[Tuple[int, int, int, int]] = None,
 ) -> np.ndarray:
     out = vis_bgr.copy()
     x0, y0, x1, y1 = fit_box
@@ -877,6 +1282,9 @@ def draw_boxes_on_vis(
     if exif_box is not None:
         gx0, gy0, gx1, gy1 = exif_box
         cv2.rectangle(out, (gx0, gy0), (gx1, gy1), (0, 255, 0), 8)  # EXIF green
+    if dual_box is not None:
+        dx0, dy0, dx1, dy1 = dual_box
+        cv2.rectangle(out, (dx0, dy0), (dx1, dy1), (255, 255, 0), 8)  # DUAL cyan
     return out
 
 
@@ -886,45 +1294,64 @@ def make_comparison_montage(
     img_exif_bgr: Optional[np.ndarray],
     img_fit_bgr: np.ndarray,
     cell_w: int,
-    cell_h: int
+    cell_h: int,
+    img_ecc_bgr: Optional[np.ndarray] = None,
+    dual_th_bgr: Optional[np.ndarray] = None,
+    img_dual_bgr: Optional[np.ndarray] = None,
+    force_dual: bool = False,
 ) -> np.ndarray:
+    def blank_cell(label: Optional[str] = None) -> np.ndarray:
+        cell = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+        if label:
+            put_text(cell, label, (20, 50), 0.8)
+        return cell
+
+    vis_cell = resize_keep_aspect_pad(vis_boxes_bgr, cell_w, cell_h)
+    label = "vis (red=FIT, green=EXIF)"
+    if force_dual or (dual_th_bgr is not None) or (img_dual_bgr is not None):
+        label = "vis (red=FIT, green=EXIF, cyan=DUAL)"
+    put_text(vis_cell, label, (20, 50), 0.70)
+
+    ir_cell = resize_keep_aspect_pad(th_bgr, cell_w, cell_h)
+    put_text(ir_cell, "ir", (20, 50), 1.0)
+
+    exif_cell = blank_cell("image-exif (none)")
+    if img_exif_bgr is not None:
+        exif_cell = resize_keep_aspect_pad(img_exif_bgr, cell_w, cell_h)
+        put_text(exif_cell, "image-exif", (20, 50), 1.0)
+
+    fit_cell = resize_keep_aspect_pad(img_fit_bgr, cell_w, cell_h)
+    put_text(fit_cell, "image-fit", (20, 50), 1.0)
+
+    dual_th_cell = blank_cell("ir-dual (none)")
+    if dual_th_bgr is not None:
+        dual_th_cell = resize_keep_aspect_pad(dual_th_bgr, cell_w, cell_h)
+        put_text(dual_th_cell, "ir-dual", (20, 50), 1.0)
+
+    dual_rgb_cell = blank_cell("image-dual (none)")
+    if img_dual_bgr is not None:
+        dual_rgb_cell = resize_keep_aspect_pad(img_dual_bgr, cell_w, cell_h)
+        put_text(dual_rgb_cell, "image-dual", (20, 50), 1.0)
+
+    ov_exif_cell = blank_cell("overlay-exif (none)")
+    if img_exif_bgr is not None:
+        ov_exif = overlay_thermal_rgb(th_bgr, img_exif_bgr, alpha_th=0.60)
+        ov_exif_cell = resize_keep_aspect_pad(ov_exif, cell_w, cell_h)
+        put_text(ov_exif_cell, "overlay-exif", (20, 50), 1.0)
+
     ov_fit = overlay_thermal_rgb(th_bgr, img_fit_bgr, alpha_th=0.60)
-    ov_exif = overlay_thermal_rgb(th_bgr, img_exif_bgr, alpha_th=0.60) if img_exif_bgr is not None else None
+    ov_fit_cell = resize_keep_aspect_pad(ov_fit, cell_w, cell_h)
+    put_text(ov_fit_cell, "overlay-fit", (20, 50), 1.0)
 
-    if img_exif_bgr is None or ov_exif is None:
-        top = resize_keep_aspect_pad(vis_boxes_bgr, cell_w * 2, cell_h)
-        put_text(top, "VIS (red=FIT)", (20, 50), 1.0)
+    ov_dual_cell = blank_cell("overlay-dual (none)")
+    if (dual_th_bgr is not None) and (img_dual_bgr is not None):
+        ov_dual = overlay_thermal_rgb(dual_th_bgr, img_dual_bgr, alpha_th=0.60)
+        ov_dual_cell = resize_keep_aspect_pad(ov_dual, cell_w, cell_h)
+        put_text(ov_dual_cell, "overlay-dual", (20, 50), 1.0)
 
-        ir_cell = resize_keep_aspect_pad(th_bgr, cell_w, cell_h)
-        put_text(ir_cell, "ir", (20, 50), 1.0)
-
-        fit_cell = resize_keep_aspect_pad(img_fit_bgr, cell_w, cell_h)
-        put_text(fit_cell, "image-fit", (20, 50), 1.0)
-
-        mid = np.concatenate([ir_cell, fit_cell], axis=1)
-
-        ov_fit_big = resize_keep_aspect_pad(ov_fit, cell_w * 2, cell_h)
-        put_text(ov_fit_big, "overlay-fit (ir + image-fit)", (20, 50), 1.0)
-
-        return np.concatenate([top, mid, ov_fit_big], axis=0)
-
-    A = resize_keep_aspect_pad(vis_boxes_bgr, cell_w, cell_h)
-    B = resize_keep_aspect_pad(th_bgr, cell_w, cell_h)
-    C = resize_keep_aspect_pad(img_exif_bgr, cell_w, cell_h)
-    D = resize_keep_aspect_pad(img_fit_bgr, cell_w, cell_h)
-    E = resize_keep_aspect_pad(ov_exif, cell_w, cell_h)
-    F = resize_keep_aspect_pad(ov_fit, cell_w, cell_h)
-
-    put_text(A, "vis (red=FIT, green=EXIF)", (20, 50), 0.85)
-    put_text(B, "ir", (20, 50), 1.0)
-    put_text(C, "image-exif", (20, 50), 1.0)
-    put_text(D, "image-fit", (20, 50), 1.0)
-    put_text(E, "overlay-exif", (20, 50), 1.0)
-    put_text(F, "overlay-fit", (20, 50), 1.0)
-
-    row1 = np.concatenate([A, B], axis=1)
-    row2 = np.concatenate([C, D], axis=1)
-    row3 = np.concatenate([E, F], axis=1)
+    row1 = np.concatenate([vis_cell, ir_cell, dual_th_cell], axis=1)
+    row2 = np.concatenate([exif_cell, fit_cell, dual_rgb_cell], axis=1)
+    row3 = np.concatenate([ov_exif_cell, ov_fit_cell, ov_dual_cell], axis=1)
     return np.concatenate([row1, row2, row3], axis=0)
 
 
@@ -977,6 +1404,10 @@ def output_rgb_filename(pair: PairItem) -> str:
     return f"{pair.stem}.jpg"
 
 
+def output_th_filename(pair: PairItem) -> str:
+    return pair.th_path.name
+
+
 
 # ----------------------------
 # Main
@@ -994,10 +1425,35 @@ def main() -> int:
                     help="If set, output comparison montages (slower).")
 
     # user-requested defaults
-    ap.add_argument("--align", type=str, default="both", choices=["exif", "fit", "both"],
-                    help="Which aligned outputs to generate: exif/fit/both (default both).")
+    ap.add_argument("--align", type=str, default="both", choices=["exif", "fit", "ecc", "both", "all"],
+                    help="Which aligned outputs to generate: exif/fit/ecc/both/all (default both).")
     ap.add_argument("--stage", type=str, default="both", choices=["fit", "apply", "both"],
                     help="Which stages to run: fit/apply/both (default both).")
+
+    # ECC / SfM-safe options (default OFF; only used when align includes ecc)
+    ap.add_argument("--ecc_motion", type=str, default="homography", choices=["homography", "affine"],
+                    help="ECC motion model for estimation (default: homography; only for estimation).")
+    ap.add_argument("--ecc_iter", type=int, default=80, help="ECC max iterations (default: 80).")
+    ap.add_argument("--ecc_eps", type=float, default=1e-6, help="ECC convergence epsilon (default: 1e-6).")
+    ap.add_argument("--ecc_init", type=str, default="auto", choices=["auto", "fit", "exif", "center"],
+                    help="ECC initialization source: auto/fit/exif/center (default: auto).")
+    ap.add_argument("--structure_mode", type=str, default="sobel_mag",
+                    choices=["sobel_mag", "rank_census_lite"],
+                    help="Structure representation for ECC/quality (default: sobel_mag).")
+    ap.add_argument("--ecc_q_min", type=float, default=None,
+                    help="If set, mark frames with q_total < threshold as low_quality (default: None).")
+    ap.add_argument("--dual", action="store_true",
+                    help="Enable dual-output strategy: RGB SfM-safe + thermal aligned (default: off).")
+    ap.add_argument("--dual_frames", type=int, default=60,
+                    help="Frames used to estimate global H for dual-output (default: 60).")
+    ap.add_argument("--dual_q_min", type=float, default=0.05,
+                    help="Quality threshold for global H candidates (default: 0.05).")
+    ap.add_argument("--sfm_allow_rot", action="store_true",
+                    help="Allow a global small rotation for SfM-safe output (default: off).")
+    ap.add_argument("--sfm_rot_deg", type=float, default=0.0,
+                    help="Global rotation angle in degrees when --sfm_allow_rot is set (default: 0).")
+    ap.add_argument("--sfm_max_rot_deg", type=float, default=2.0,
+                    help="Clamp |rotation| <= this value in degrees (default: 2).")
 
     args = ap.parse_args()
 
@@ -1008,14 +1464,33 @@ def main() -> int:
 
     # flags
     want_comp = bool(args.comparison)
-    want_fit = args.align in ("fit", "both")
-    want_exif = args.align in ("exif", "both")
+    want_fit = args.align in ("fit", "both", "all")
+    want_exif = args.align in ("exif", "both", "all")
+    want_ecc = args.align in ("ecc", "all")
     do_fit = args.stage in ("fit", "both")
     do_apply = args.stage in ("apply", "both")
 
+    ecc_motion = str(args.ecc_motion).strip().lower()
+    ecc_init = str(args.ecc_init).strip().lower()
+    structure_mode = str(args.structure_mode).strip().lower()
+    ecc_q_min = args.ecc_q_min
+    want_dual = bool(args.dual)
+    dual_frames = int(args.dual_frames)
+    dual_q_min = float(args.dual_q_min)
+    allow_rot = bool(args.sfm_allow_rot)
+    theta_req = float(args.sfm_rot_deg)
+    theta_deg = theta_req if allow_rot else 0.0
+    max_theta = float(args.sfm_max_rot_deg)
+    if allow_rot and abs(theta_deg) > max_theta:
+        theta_deg = max(-max_theta, min(max_theta, theta_deg))
+
+    dual_struct_mode = structure_mode
+    if want_dual and structure_mode == "sobel_mag":
+        dual_struct_mode = "rank_census_lite"
+
     # comparison needs boxes; boxes need fit model
-    need_fit_model = want_fit or want_comp
-    need_exif_probe = want_exif or need_fit_model  # exif can help seed fov candidates
+    need_fit_model = want_fit or want_comp or want_dual or (want_ecc and args.ecc_init in ("fit", "auto"))
+    need_exif_probe = want_exif or need_fit_model or (want_ecc and args.ecc_init in ("exif", "auto"))  # exif can help seed fov candidates
 
     # paths
     debug_dir = out_dir / "debug"
@@ -1023,7 +1498,14 @@ def main() -> int:
     img_root = out_dir / "image"
     img_fit_dir = img_root / "image-fit"
     img_exif_dir = img_root / "image-exif"
+    img_ecc_dir = img_root / "image-ecc"
+    img_dual_dir = img_root / "image-dual"
     comp_dir = img_root / "comparison"
+    sidecar_ecc_dir = out_dir / "sidecar" / "ecc"
+    sidecar_dual_dir = out_dir / "sidecar" / "dual"
+    th_root = out_dir / "thermal"
+    th_dual_dir = th_root / "thermal-dual"
+    model_dual_path = model_dir / "model_dual.json"
 
     ensure_dir(debug_dir)
     ensure_dir(model_dir)
@@ -1040,6 +1522,17 @@ def main() -> int:
     logger.log("INFO", f"stage={args.stage} align={args.align} comparison={want_comp}")
     logger.log("INFO", f"piexif_installed={HAS_PIEXIF}")
     logger.log("INFO", f"exiftool_found={bool(find_exiftool())}")
+    if want_ecc:
+        if allow_rot and theta_req != theta_deg:
+            logger.log("WARN", f"[ECC] sfm_rot_deg clamped from {theta_req:.3f} to {theta_deg:.3f} (max={max_theta:.3f})")
+        logger.log("INFO", f"[ECC] motion={ecc_motion} init={ecc_init} struct={structure_mode} "
+                           f"iter={int(args.ecc_iter)} eps={float(args.ecc_eps):.2e} "
+                           f"sfm_rot_deg={'0.0 (locked)' if not allow_rot else f'{theta_deg:.3f}'} "
+                           f"q_min={'None' if ecc_q_min is None else ecc_q_min}")
+    if want_dual:
+        logger.log("INFO", f"[DUAL] enabled frames={dual_frames} q_min={dual_q_min} "
+                           f"struct={dual_struct_mode} "
+                           f"sfm_rot_deg={'0.0 (locked)' if not allow_rot else f'{theta_deg:.3f}'}")
 
     pairs_all = find_pairs(rgb_dir, th_dir, logger)
     pairs_found = len(pairs_all)
@@ -1193,7 +1686,7 @@ def main() -> int:
                 logger.close()
                 return 5
     else:
-        logger.log("INFO", "[FIT] Skipped (align=exif and comparison disabled).")
+        logger.log("INFO", "[FIT] Skipped (fit model not required by current flags).")
 
     # save model_exif when fitting and user wants exif/both
     if do_fit and want_exif and exif_usable and zr_med is not None and fov_exif_med is not None:
@@ -1211,22 +1704,227 @@ def main() -> int:
         with open(model_exif_path, "w", encoding="utf-8") as f:
             json.dump(model_exif, f, ensure_ascii=False, indent=2)
 
+    # ---------------- DUAL global estimation (RGB SfM-safe + thermal aligned) ----------------
+    dual_H_global = None
+    dual_S = None
+    dual_s = None
+    dual_tx = None
+    dual_ty = None
+    dual_box_global = None
+    dual_h_safe2thermal = None
+    dual_h_thermal2safe = None
+    dual_selected = None
+    dual_stats_path = debug_dir / f"dual_stats-{suffix}.json"
+
+    if want_dual and do_apply:
+        logger.log("INFO", f"[DUAL] Estimating global H (samples={dual_frames}, q_min={dual_q_min}) ...")
+        sample_indices = select_even_indices(len(pairs), dual_frames)
+        dual_candidates_ok: List[Dict[str, object]] = []
+        dual_candidates_any: List[Dict[str, object]] = []
+        dual_stats = {
+            "samples": int(len(sample_indices)),
+            "candidates": 0,
+            "q_total": RunningStat(),
+            "grad_ncc": RunningStat(),
+            "edge_f1": RunningStat(),
+            "ecc_score": RunningStat(),
+            "cands": [],
+        }
+        dual_min_ok = max(6, int(0.2 * len(sample_indices))) if len(sample_indices) > 0 else 0
+
+        for s_idx, p_idx in enumerate(sample_indices, start=1):
+            pair = pairs[p_idx]
+            rgb_bgr, th_bgr = load_pair_images(pair)
+            rgb_h, rgb_w = rgb_bgr.shape[:2]
+            cx_fit = rgb_w / 2.0 + fit_cx_med * rgb_w
+            cy_fit = rgb_h / 2.0 + fit_cy_med * rgb_h
+            init_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, float(fit_fov_med), cx_fit, cy_fit)
+            H_init = homography_from_crop_box(init_box, th_w0, th_h0)
+
+            ecc_res = estimate_ecc_on_pair(
+                rgb_bgr=rgb_bgr,
+                th_bgr=th_bgr,
+                H_init=H_init,
+                motion=ecc_motion,
+                ecc_iter=int(args.ecc_iter),
+                ecc_eps=float(args.ecc_eps),
+                structure_mode=dual_struct_mode,
+            )
+
+            ecc_ok = bool(ecc_res.ok and ecc_res.h_raw is not None)
+            H_cand = ecc_res.h_raw if (ecc_ok and ecc_res.h_raw is not None) else H_init
+            ecc_score = float(ecc_res.ecc_score) if (ecc_ok and ecc_res.ecc_score is not None) else None
+
+            grad_ncc, edge_f1 = _quality_for_h(rgb_bgr, th_bgr, H_cand, dual_struct_mode)
+            q_total = quality_combine(ecc_score, grad_ncc, edge_f1)
+
+            dual_stats["q_total"].add(q_total)
+            dual_stats["grad_ncc"].add(grad_ncc)
+            dual_stats["edge_f1"].add(edge_f1)
+            dual_stats["ecc_score"].add(ecc_score)
+
+            info = {
+                "stem": pair.stem,
+                "ecc_ok": bool(ecc_ok),
+                "ecc_reason": ecc_res.reason,
+                "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                "grad_ncc": float(grad_ncc) if grad_ncc is not None else None,
+                "edge_f1": float(edge_f1) if edge_f1 is not None else None,
+                "q_total": float(q_total) if q_total is not None else None,
+            }
+            dual_stats["cands"].append(info)
+
+            if q_total is not None and q_total >= float(dual_q_min):
+                cand = {
+                    "stem": pair.stem,
+                    "H": H_cand,
+                    "q_total": float(q_total),
+                    "ecc_ok": bool(ecc_ok),
+                    "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                    "grad_ncc": float(grad_ncc) if grad_ncc is not None else None,
+                    "edge_f1": float(edge_f1) if edge_f1 is not None else None,
+                }
+                dual_candidates_any.append(cand)
+                if ecc_ok:
+                    dual_candidates_ok.append(cand)
+
+            if s_idx % max(1, len(sample_indices) // 5) == 0:
+                logger.log("INFO", f"[DUAL] sample {s_idx}/{len(sample_indices)} stem={pair.stem} "
+                                   f"ecc_ok={ecc_ok} q_total={q_total if q_total is not None else 'None'}")
+
+        use_candidates = dual_candidates_ok if len(dual_candidates_ok) >= dual_min_ok else dual_candidates_ok
+        if len(use_candidates) < max(3, int(0.1 * len(sample_indices))):
+            use_candidates = dual_candidates_any
+        dual_stats["candidates"] = int(len(use_candidates))
+        if len(dual_candidates_ok) >= dual_min_ok:
+            logger.log("INFO", f"[DUAL] Using ECC-ok candidates: {len(dual_candidates_ok)}/{len(sample_indices)}")
+        elif dual_candidates_ok:
+            logger.log("WARN", f"[DUAL] Few ECC-ok candidates ({len(dual_candidates_ok)}). Using available ECC-ok set.")
+        else:
+            logger.log("WARN", "[DUAL] No ECC-ok candidates; falling back to any candidates (may resemble FIT).")
+
+        best = _select_global_h_by_corner_median(use_candidates, rgb_w0, rgb_h0)
+        if best is None and use_candidates:
+            def _qkey(item: Dict[str, object]) -> float:
+                q = item.get("q_total")
+                try:
+                    return float(q)  # type: ignore[arg-type]
+                except Exception:
+                    return -1e9
+            use_candidates.sort(key=_qkey, reverse=True)
+            best = use_candidates[0]
+
+        if best is not None and best.get("H") is not None:
+            dual_H_global = best.get("H")
+            qv = best.get("q_total")
+            ev = best.get("ecc_score")
+            dual_selected = {
+                "stem": best.get("stem"),
+                "q_total": float(qv) if qv is not None else None,
+                "ecc_score": float(ev) if ev is not None else None,
+            }
+            logger.log("INFO", f"[DUAL] Global H selected from stem={dual_selected.get('stem')} "
+                               f"q_total={dual_selected.get('q_total')}")
+        else:
+            cx_fit0 = rgb_w0 / 2.0 + fit_cx_med * rgb_w0
+            cy_fit0 = rgb_h0 / 2.0 + fit_cy_med * rgb_h0
+            init_box0 = crop_box_from_fov(rgb_w0, rgb_h0, th_w0, th_h0, float(fit_fov_med), cx_fit0, cy_fit0)
+            dual_H_global = homography_from_crop_box(init_box0, th_w0, th_h0)
+            dual_selected = {"stem": None, "q_total": None, "ecc_score": None}
+            logger.log("WARN", "[DUAL] No valid candidates; fallback to fit-derived H.")
+
+        if dual_H_global is not None:
+            S_dual, s_dual, tx_dual, ty_dual = fit_sfm_safe_similarity_from_h(
+                dual_H_global, rgb_w0, rgb_h0, th_w0, th_h0, theta_deg if allow_rot else 0.0
+            )
+            dual_S = S_dual
+            dual_s, dual_tx, dual_ty = float(s_dual), float(tx_dual), float(ty_dual)
+            if not allow_rot or abs(theta_deg) <= 1e-6:
+                dual_box_global = crop_box_from_similarity(dual_s, dual_tx, dual_ty, th_w0, th_h0)
+            try:
+                S_inv = np.linalg.inv(dual_S)
+                dual_h_safe2thermal = _normalize_homography(_mat33_from_affine(dual_H_global) @ S_inv)
+                dual_h_thermal2safe = np.linalg.inv(dual_h_safe2thermal)
+            except Exception:
+                dual_h_safe2thermal = None
+                dual_h_thermal2safe = None
+
+            try:
+                dual_stats_out = {
+                    "samples": dual_stats["samples"],
+                    "candidates": dual_stats["candidates"],
+                    "selected": dual_selected,
+                    "q_total": dual_stats["q_total"].as_dict(),
+                    "grad_ncc": dual_stats["grad_ncc"].as_dict(),
+                    "edge_f1": dual_stats["edge_f1"].as_dict(),
+                    "ecc_score": dual_stats["ecc_score"].as_dict(),
+                    "cands": dual_stats["cands"],
+                }
+                dual_stats_path.write_text(json.dumps(dual_stats_out, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                logger.log("WARN", f"[DUAL] Failed to write dual_stats: {e}")
+
+            try:
+                dual_model = {
+                    "version": 1,
+                    "thermal_size": {"w": th_w0, "h": th_h0},
+                    "rgb_size": {"w": rgb_w0, "h": rgb_h0},
+                    "H_global": _mat33_from_affine(dual_H_global).tolist(),
+                    "S_sfm_safe": _mat33_from_affine(dual_S).tolist() if dual_S is not None else None,
+                    "H_safe2thermal": dual_h_safe2thermal.tolist() if dual_h_safe2thermal is not None else None,
+                    "H_thermal2safe": dual_h_thermal2safe.tolist() if dual_h_thermal2safe is not None else None,
+                    "sfm_safe": {"allow_rot": bool(allow_rot), "theta_deg": float(theta_deg)},
+                    "dual_frames": int(dual_frames),
+                    "dual_q_min": float(dual_q_min),
+                    "structure_mode": structure_mode,
+                    "selected": dual_selected,
+                }
+                model_dual_path.write_text(json.dumps(dual_model, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                logger.log("WARN", f"[DUAL] Failed to write model_dual: {e}")
+
     # ---------------- APPLY ----------------
     fit_written = 0
     exif_written = 0
+    ecc_written = 0
+    dual_rgb_written = 0
+    dual_th_written = 0
     t_apply = 0.0
 
     if do_apply:
-        logger.log("INFO", "[APPLY] Writing image-fit / image-exif (optional) / comparison (optional) ...")
+        logger.log("INFO", "[APPLY] Writing image-fit / image-exif / image-ecc / image-dual (optional) / comparison (optional) ...")
 
         if want_fit:
             ensure_dir(img_fit_dir)
         if want_exif and exif_usable:
             ensure_dir(img_exif_dir)
+        if want_ecc:
+            ensure_dir(img_ecc_dir)
+            ensure_dir(sidecar_ecc_dir)
+        if want_dual:
+            ensure_dir(img_dual_dir)
+            ensure_dir(th_dual_dir)
+            ensure_dir(sidecar_dual_dir)
         if want_comp:
             ensure_dir(comp_dir)
 
         per_fp = open(per_image_path, "w", encoding="utf-8", errors="ignore")
+
+        ecc_stats = {
+            "count": 0,
+            "ok": 0,
+            "fail": 0,
+            "reasons": {},
+            "ecc_score": RunningStat(),
+            "q_total": RunningStat(),
+            "grad_ncc": RunningStat(),
+            "edge_f1": RunningStat(),
+            "worst_q": [],  # list of dicts
+            "best_q": [],
+            "fail_samples": [],
+        }
+        ecc_stats_path = debug_dir / f"ecc_stats-{suffix}.json"
+        max_keep = 30
 
         cell_w, cell_h = th_w0, th_h0
 
@@ -1239,8 +1937,8 @@ def main() -> int:
             out_name = output_rgb_filename(pair)
 
             # Decide which crops are needed
-            need_fit_crop = want_fit or want_comp
-            need_exif_crop = (want_exif or want_comp) and exif_usable
+            need_fit_crop = want_fit or want_comp or want_ecc
+            need_exif_crop = (want_exif or want_comp or want_ecc) and exif_usable
 
             fit_box = None
             img_fit = None
@@ -1271,8 +1969,352 @@ def main() -> int:
                     crop_exif = crop_with_pad(rgb_bgr, exif_box)
                     img_exif = cv2.resize(crop_exif, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
 
+            # ECC (estimate H, but output SfM-safe crop+resize)
+            img_ecc = None
+            zoom_ecc = None
+            ecc_score = None
+            ecc_ok = False
+            ecc_reason = None
+            ecc_init_source = None
+            ecc_h_init = None
+            ecc_h_raw = None
+            ecc_h_safe2thermal = None
+            ecc_warp_residual = None
+            ecc_s_matrix = None
+            grad_ncc_score = None
+            edge_f1_score = None
+            q_total = None
+            ecc_quality_ok = None
+            ecc_box = None
+            ecc_used_init = False
+            ecc_fallback_reason = None
+            ecc_q_init = None
+
+            # DUAL outputs (global H + SfM-safe RGB + aligned thermal)
+            img_dual = None
+            th_dual = None
+            zoom_dual = None
+            dual_box = None
+            dual_grad_ncc = None
+            dual_edge_f1 = None
+            dual_q_total = None
+            dual_shift = None
+            dual_shift_resp = None
+            dual_shift_applied = False
+            dual_invalid_ratio = None
+            dual_fallback_reason = None
+            dual_sidecar_path = None
+
+            if want_ecc:
+                init_box = None
+                if ecc_init == "fit":
+                    if fit_box is not None:
+                        ecc_init_source = "fit"
+                        init_box = fit_box
+                    elif exif_box is not None:
+                        ecc_init_source = "exif_fallback"
+                        init_box = exif_box
+                    else:
+                        ecc_init_source = "center_fallback"
+                elif ecc_init == "exif":
+                    if exif_box is not None:
+                        ecc_init_source = "exif"
+                        init_box = exif_box
+                    elif fit_box is not None:
+                        ecc_init_source = "fit_fallback"
+                        init_box = fit_box
+                    else:
+                        ecc_init_source = "center_fallback"
+                elif ecc_init == "auto":
+                    if fit_box is not None:
+                        ecc_init_source = "fit"
+                        init_box = fit_box
+                    elif exif_box is not None:
+                        ecc_init_source = "exif"
+                        init_box = exif_box
+                    else:
+                        ecc_init_source = "center"
+                else:
+                    ecc_init_source = "center"
+
+                if init_box is None:
+                    init_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, 1.0, rgb_w / 2.0, rgb_h / 2.0)
+
+                # Precompute init crop for potential fallback + quality comparison
+                init_crop = None
+                init_crop_reason = None
+                max_pad = int(max(rgb_w, rgb_h) * 0.5)
+                max_pixels = int(rgb_w * rgb_h * 6)
+                init_crop, init_crop_reason = safe_crop_with_pad(rgb_bgr, init_box, max_pad, max_pixels)
+                init_img = None
+                if init_crop is not None:
+                    init_img = cv2.resize(init_crop, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
+                    try:
+                        struct_th_init = build_structure(th_bgr, mode=structure_mode)
+                        struct_init = build_structure(init_img, mode=structure_mode)
+                        ecc_q_init = quality_combine(
+                            None,
+                            quality_grad_ncc(struct_th_init, struct_init),
+                            quality_edge_f1(struct_th_init, struct_init),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    # If init crop failed, fallback to safe center crop
+                    init_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, 1.0, rgb_w / 2.0, rgb_h / 2.0)
+                    init_crop, init_crop_reason = safe_crop_with_pad(rgb_bgr, init_box, max_pad, max_pixels)
+                    if init_crop is not None:
+                        init_img = cv2.resize(init_crop, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
+
+                ecc_h_init = homography_from_crop_box(init_box, th_w0, th_h0)
+
+                ecc_res = estimate_ecc_on_pair(
+                    rgb_bgr=rgb_bgr,
+                    th_bgr=th_bgr,
+                    H_init=ecc_h_init,
+                    motion=ecc_motion,
+                    ecc_iter=int(args.ecc_iter),
+                    ecc_eps=float(args.ecc_eps),
+                    structure_mode=structure_mode,
+                )
+                if ecc_res.ok and ecc_res.h_raw is not None:
+                    ecc_ok = True
+                    ecc_score = ecc_res.ecc_score
+                    ecc_h_raw = ecc_res.h_raw
+                    ecc_warp_residual = ecc_res.warp_residual
+                else:
+                    ecc_ok = False
+                    ecc_reason = ecc_res.reason
+                    ecc_h_raw = ecc_h_init
+
+                H_for_s = ecc_h_raw if ecc_h_raw is not None else ecc_h_init
+                S, s, tx, ty = fit_sfm_safe_similarity_from_h(
+                    H_for_s, rgb_w, rgb_h, th_w0, th_h0, theta_deg if allow_rot else 0.0
+                )
+                ecc_s_matrix = S
+
+                if allow_rot and abs(theta_deg) > 1e-6:
+                    interp = cv2.INTER_LINEAR if s > 1.0 else cv2.INTER_AREA
+                    img_ecc = cv2.warpAffine(
+                        rgb_bgr,
+                        S[:2],
+                        (th_w0, th_h0),
+                        flags=interp,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=(0, 0, 0),
+                    )
+                    crop_w = float(th_w0) / float(s) if s > 1e-8 else None
+                else:
+                    ecc_box = crop_box_from_similarity(s, tx, ty, th_w0, th_h0)
+                    crop_ecc, crop_reason = safe_crop_with_pad(rgb_bgr, ecc_box, max_pad, max_pixels)
+                    if crop_ecc is None:
+                        ecc_ok = False
+                        ecc_fallback_reason = f"ecc_crop_invalid:{crop_reason}"
+                    else:
+                        img_ecc = cv2.resize(crop_ecc, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
+                        crop_w = float(ecc_box[2] - ecc_box[0])
+
+                if crop_w and crop_w > 1e-8:
+                    zoom_ecc = float(rgb_w) / float(crop_w)
+
+                try:
+                    S_inv = np.linalg.inv(S)
+                    ecc_h_safe2thermal = _normalize_homography(_mat33_from_affine(H_for_s) @ S_inv)
+                except Exception:
+                    ecc_h_safe2thermal = None
+
+                try:
+                    if img_ecc is not None:
+                        struct_th = build_structure(th_bgr, mode=structure_mode)
+                        struct_rgb = build_structure(img_ecc, mode=structure_mode)
+                        grad_ncc_score = quality_grad_ncc(struct_th, struct_rgb)
+                        edge_f1_score = quality_edge_f1(struct_th, struct_rgb)
+                        q_total = quality_combine(ecc_score, grad_ncc_score, edge_f1_score)
+                        if ecc_q_min is not None:
+                            ecc_quality_ok = bool(q_total >= float(ecc_q_min))
+                            if not ecc_quality_ok:
+                                ecc_ok = False
+                                ecc_reason = "low_quality"
+                except Exception:
+                    pass
+
+                # If ECC output looks worse than init, fallback to init crop
+                if init_img is not None:
+                    if (q_total is None) or (ecc_q_init is not None and q_total + 1e-6 < float(ecc_q_init)):
+                        img_ecc = init_img
+                        ecc_box = init_box
+                        ecc_used_init = True
+                        if ecc_fallback_reason is None:
+                            ecc_fallback_reason = "init_better"
+                elif img_ecc is None:
+                    # If ECC crop failed and init is unavailable, fall back to fit/exif image if present
+                    if img_fit is not None:
+                        img_ecc = img_fit
+                        ecc_box = fit_box
+                        ecc_used_init = True
+                        if ecc_fallback_reason is None:
+                            ecc_fallback_reason = "fallback_fit"
+                    elif img_exif is not None:
+                        img_ecc = img_exif
+                        ecc_box = exif_box
+                        ecc_used_init = True
+                        if ecc_fallback_reason is None:
+                            ecc_fallback_reason = "fallback_exif"
+
+                ecc_stats["count"] += 1
+                if ecc_ok:
+                    ecc_stats["ok"] += 1
+                else:
+                    ecc_stats["fail"] += 1
+                    if ecc_reason:
+                        ecc_stats["reasons"][ecc_reason] = int(ecc_stats["reasons"].get(ecc_reason, 0)) + 1
+
+                ecc_stats["ecc_score"].add(ecc_score)
+                ecc_stats["q_total"].add(q_total)
+                ecc_stats["grad_ncc"].add(grad_ncc_score)
+                ecc_stats["edge_f1"].add(edge_f1_score)
+
+                def _push_rank(lst, item, key, reverse=False):
+                    lst.append(item)
+                    lst.sort(key=key, reverse=reverse)
+                    if len(lst) > max_keep:
+                        lst.pop()
+
+                if q_total is not None:
+                    info = {
+                        "stem": pair.stem,
+                        "q_total": float(q_total),
+                        "ecc_ok": bool(ecc_ok),
+                        "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                        "grad_ncc": float(grad_ncc_score) if grad_ncc_score is not None else None,
+                        "edge_f1": float(edge_f1_score) if edge_f1_score is not None else None,
+                        "init": ecc_init_source,
+                        "ecc_reason": ecc_reason,
+                    }
+                    _push_rank(ecc_stats["worst_q"], info, key=lambda x: x.get("q_total", 0.0), reverse=False)
+                    _push_rank(ecc_stats["best_q"], info, key=lambda x: x.get("q_total", 0.0), reverse=True)
+
+                if (not ecc_ok) and len(ecc_stats["fail_samples"]) < max_keep:
+                    ecc_stats["fail_samples"].append({
+                        "stem": pair.stem,
+                        "ecc_reason": ecc_reason,
+                        "init": ecc_init_source,
+                        "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                        "fallback_reason": ecc_fallback_reason,
+                    })
+
+            # DUAL (global H -> SfM-safe RGB crop + aligned thermal)
+            if want_dual and dual_S is not None and dual_H_global is not None:
+                max_pad = int(max(rgb_w, rgb_h) * 0.5)
+                max_pixels = int(rgb_w * rgb_h * 6)
+                crop_w = None
+                if allow_rot and abs(theta_deg) > 1e-6:
+                    interp = cv2.INTER_LINEAR if (dual_s is not None and dual_s > 1.0) else cv2.INTER_AREA
+                    img_dual = cv2.warpAffine(
+                        rgb_bgr,
+                        dual_S[:2],
+                        (th_w0, th_h0),
+                        flags=interp,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=(0, 0, 0),
+                    )
+                    if dual_s is not None and dual_s > 1e-8:
+                        crop_w = float(th_w0) / float(dual_s)
+                else:
+                    if dual_s is not None and dual_tx is not None and dual_ty is not None:
+                        dual_box = crop_box_from_similarity(dual_s, dual_tx, dual_ty, th_w0, th_h0)
+                        crop_dual, crop_reason = safe_crop_with_pad(rgb_bgr, dual_box, max_pad, max_pixels)
+                        if crop_dual is None:
+                            dual_fallback_reason = f"dual_crop_invalid:{crop_reason}"
+                        else:
+                            img_dual = cv2.resize(crop_dual, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
+                            crop_w = float(dual_box[2] - dual_box[0])
+
+                if img_dual is None:
+                    if img_fit is not None:
+                        img_dual = img_fit
+                        dual_box = fit_box
+                        zoom_dual = zoom_fit
+                        if dual_fallback_reason is None:
+                            dual_fallback_reason = "fallback_fit"
+                    elif img_exif is not None:
+                        img_dual = img_exif
+                        dual_box = exif_box
+                        zoom_dual = zoom_exif
+                        if dual_fallback_reason is None:
+                            dual_fallback_reason = "fallback_exif"
+
+                if crop_w and crop_w > 1e-8 and zoom_dual is None:
+                    zoom_dual = float(rgb_w) / float(crop_w)
+
+                if dual_h_thermal2safe is not None:
+                    try:
+                        # Track valid region after warp, then inpaint invalid area to avoid black borders in thermal-dual.
+                        valid_src = np.full((th_h0, th_w0), 255, dtype=np.uint8)
+                        valid_mask = cv2.warpPerspective(
+                            valid_src,
+                            dual_h_thermal2safe,
+                            (th_w0, th_h0),
+                            flags=cv2.INTER_NEAREST,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=0,
+                        )
+                        dual_invalid_ratio = float(np.mean(valid_mask <= 0))
+                        th_dual = cv2.warpPerspective(
+                            th_bgr,
+                            dual_h_thermal2safe,
+                            (th_w0, th_h0),
+                            flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=(0, 0, 0),
+                        )
+                        if dual_invalid_ratio is not None and dual_invalid_ratio > 1e-6:
+                            invalid_mask = (valid_mask <= 0).astype(np.uint8) * 255
+                            th_dual = cv2.inpaint(th_dual, invalid_mask, 3, cv2.INPAINT_TELEA)
+                    except Exception:
+                        th_dual = None
+
+                if img_dual is not None and th_dual is not None:
+                    try:
+                        struct_rgb = build_structure(img_dual, mode=dual_struct_mode)
+                        struct_th = build_structure(th_dual, mode=dual_struct_mode)
+                        dual_grad_ncc = quality_grad_ncc(struct_th, struct_rgb)
+                        dual_edge_f1 = quality_edge_f1(struct_th, struct_rgb)
+                        dual_q_total = quality_combine(None, dual_grad_ncc, dual_edge_f1)
+
+                        shift = _phase_corr_shift(struct_rgb, struct_th, max_shift=3.0, min_resp=0.02)
+                        if shift is not None:
+                            dx, dy, resp = shift
+                            dual_shift = (float(dx), float(dy))
+                            dual_shift_resp = float(resp)
+                            if abs(dx) > 0.2 or abs(dy) > 0.2:
+                                M = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+                                th_shift = cv2.warpAffine(
+                                    th_dual,
+                                    M,
+                                    (th_w0, th_h0),
+                                    flags=cv2.INTER_LINEAR,
+                                    borderMode=cv2.BORDER_REPLICATE,
+                                )
+                                struct_th_shift = build_structure(th_shift, mode=dual_struct_mode)
+                                grad_ncc_shift = quality_grad_ncc(struct_th_shift, struct_rgb)
+                                edge_f1_shift = quality_edge_f1(struct_th_shift, struct_rgb)
+                                q_shift = quality_combine(None, grad_ncc_shift, edge_f1_shift)
+                                if q_shift >= dual_q_total + 1e-4:
+                                    th_dual = th_shift
+                                    dual_grad_ncc = grad_ncc_shift
+                                    dual_edge_f1 = edge_f1_shift
+                                    dual_q_total = q_shift
+                                    dual_shift_applied = True
+                    except Exception:
+                        pass
+
             out_fit_path = None
             out_exif_path = None
+            out_ecc_path = None
+            ecc_sidecar_path = None
+            out_dual_rgb_path = None
+            out_dual_th_path = None
 
             # Save fit output
             if want_fit and img_fit is not None:
@@ -1286,6 +2328,81 @@ def main() -> int:
                 save_with_metadata(pair.rgb_path, out_exif_path, img_exif, th_w0, th_h0, zoom_exif, logger)
                 exif_written += 1
 
+            # Save ecc output + sidecar
+            if want_ecc and img_ecc is not None:
+                out_ecc_path = img_ecc_dir / out_name
+                save_with_metadata(pair.rgb_path, out_ecc_path, img_ecc, th_w0, th_h0, zoom_ecc, logger)
+                ecc_written += 1
+
+                ecc_sidecar_path = sidecar_ecc_dir / f"{pair.stem}.json"
+                sidecar = {
+                    "stem": pair.stem,
+                    "ecc_ok": bool(ecc_ok),
+                    "ecc_reason": ecc_reason,
+                    "ecc_used_init": bool(ecc_used_init),
+                    "ecc_fallback_reason": ecc_fallback_reason,
+                    "ecc_q_init": float(ecc_q_init) if ecc_q_init is not None else None,
+                    "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                    "ecc_motion": ecc_motion,
+                    "ecc_iter": int(args.ecc_iter),
+                    "ecc_eps": float(args.ecc_eps),
+                    "structure_mode": structure_mode,
+                    "init_source": ecc_init_source,
+                    "H_init": _mat33_from_affine(ecc_h_init).tolist() if ecc_h_init is not None else None,
+                    "H_raw": _mat33_from_affine(ecc_h_raw).tolist() if ecc_h_raw is not None else None,
+                    "H_residual": _mat33_from_affine(ecc_warp_residual).tolist() if ecc_warp_residual is not None else None,
+                    "S_sfm_safe": _mat33_from_affine(ecc_s_matrix).tolist() if ecc_s_matrix is not None else None,
+                    "sfm_safe": {
+                        "allow_rot": bool(allow_rot),
+                        "theta_deg": float(theta_deg),
+                    },
+                    "H_safe2thermal": ecc_h_safe2thermal.tolist() if ecc_h_safe2thermal is not None else None,
+                    "quality": {
+                        "grad_ncc": float(grad_ncc_score) if grad_ncc_score is not None else None,
+                        "edge_f1": float(edge_f1_score) if edge_f1_score is not None else None,
+                        "q_total": float(q_total) if q_total is not None else None,
+                        "q_min": float(ecc_q_min) if ecc_q_min is not None else None,
+                        "quality_ok": bool(ecc_quality_ok) if ecc_quality_ok is not None else None,
+                    },
+                }
+                ecc_sidecar_path.write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # Save dual outputs + sidecar
+            if want_dual and img_dual is not None:
+                out_dual_rgb_path = img_dual_dir / out_name
+                save_with_metadata(pair.rgb_path, out_dual_rgb_path, img_dual, th_w0, th_h0, zoom_dual, logger)
+                dual_rgb_written += 1
+            if want_dual and th_dual is not None:
+                out_dual_th_path = th_dual_dir / output_th_filename(pair)
+                save_png(out_dual_th_path, th_dual)
+                dual_th_written += 1
+            if want_dual and (img_dual is not None or th_dual is not None):
+                dual_sidecar_path = sidecar_dual_dir / f"{pair.stem}.json"
+                dual_sidecar = {
+                    "stem": pair.stem,
+                    "dual_ok": bool(img_dual is not None and th_dual is not None),
+                    "dual_fallback_reason": dual_fallback_reason,
+                    "structure_mode": dual_struct_mode,
+                    "H_global": _mat33_from_affine(dual_H_global).tolist() if dual_H_global is not None else None,
+                    "S_sfm_safe": _mat33_from_affine(dual_S).tolist() if dual_S is not None else None,
+                    "H_safe2thermal": dual_h_safe2thermal.tolist() if dual_h_safe2thermal is not None else None,
+                    "H_thermal2safe": dual_h_thermal2safe.tolist() if dual_h_thermal2safe is not None else None,
+                    "sfm_safe": {"allow_rot": bool(allow_rot), "theta_deg": float(theta_deg)},
+                    "dual_shift": {
+                        "dx": float(dual_shift[0]) if dual_shift is not None else None,
+                        "dy": float(dual_shift[1]) if dual_shift is not None else None,
+                        "resp": float(dual_shift_resp) if dual_shift_resp is not None else None,
+                        "applied": bool(dual_shift_applied),
+                    },
+                    "warp_invalid_ratio": float(dual_invalid_ratio) if dual_invalid_ratio is not None else None,
+                    "quality": {
+                        "grad_ncc": float(dual_grad_ncc) if dual_grad_ncc is not None else None,
+                        "edge_f1": float(dual_edge_f1) if dual_edge_f1 is not None else None,
+                        "q_total": float(dual_q_total) if dual_q_total is not None else None,
+                    },
+                }
+                dual_sidecar_path.write_text(json.dumps(dual_sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
+
             # comparison montage (optional)
             cmp_path = None
             if want_comp:
@@ -1293,20 +2410,43 @@ def main() -> int:
                 if fit_box is None:
                     # fall back to full-frame box if fit was not computed for some reason
                     fit_box = (0, 0, rgb_w, rgb_h)
-                vis_boxes = draw_boxes_on_vis(rgb_bgr, fit_box, exif_box)
+                vis_boxes = draw_boxes_on_vis(
+                    rgb_bgr,
+                    fit_box,
+                    exif_box,
+                    None,
+                    dual_box if want_dual else None,
+                )
                 # montage expects img_fit; if missing, reuse img_exif or blank
                 if img_fit is None:
                     img_fit = img_exif if img_exif is not None else cv2.resize(rgb_bgr, (th_w0, th_h0), interpolation=cv2.INTER_AREA)
-                cmp_img = make_comparison_montage(vis_boxes, th_bgr, img_exif, img_fit, cell_w, cell_h)
+                cmp_img = make_comparison_montage(
+                    vis_boxes,
+                    th_bgr,
+                    img_exif,
+                    img_fit,
+                    cell_w,
+                    cell_h,
+                    None,
+                    dual_th_bgr=th_dual if want_dual else None,
+                    img_dual_bgr=img_dual if want_dual else None,
+                    force_dual=bool(want_dual),
+                )
                 cmp_path = comp_dir / f"{pair.stem}.png"
                 save_png(cmp_path, cmp_img)
 
             exp_dz_fit, exp_f35_fit = (None, None)
             exp_dz_exif, exp_f35_exif = (None, None)
+            exp_dz_ecc, exp_f35_ecc = (None, None)
+            exp_dz_dual, exp_f35_dual = (None, None)
             if zoom_fit is not None:
                 exp_dz_fit, exp_f35_fit = _compute_zoom_updates_for_crop(pair.rgb_path, zoom_fit)
             if zoom_exif is not None:
                 exp_dz_exif, exp_f35_exif = _compute_zoom_updates_for_crop(pair.rgb_path, zoom_exif)
+            if zoom_ecc is not None:
+                exp_dz_ecc, exp_f35_ecc = _compute_zoom_updates_for_crop(pair.rgb_path, zoom_ecc)
+            if zoom_dual is not None:
+                exp_dz_dual, exp_f35_dual = _compute_zoom_updates_for_crop(pair.rgb_path, zoom_dual)
 
             dt = time.perf_counter() - t0
             per_fp.write(json.dumps({
@@ -1316,23 +2456,77 @@ def main() -> int:
                 "time_sec": round(dt, 4),
                 "fit_out": str(out_fit_path) if out_fit_path else None,
                 "exif_out": str(out_exif_path) if out_exif_path else None,
+                "ecc_out": str(out_ecc_path) if out_ecc_path else None,
                 "comparison": str(cmp_path) if cmp_path else None,
+                "comparison_overlay_ecc": None,
+                "ecc_sidecar": str(ecc_sidecar_path) if ecc_sidecar_path else None,
+                "ecc_score": float(ecc_score) if ecc_score is not None else None,
+                "ecc_ok": bool(ecc_ok) if want_ecc else None,
+                "ecc_init": ecc_init_source if want_ecc else None,
+                "ecc_motion": ecc_motion if want_ecc else None,
+                "ecc_reason": ecc_reason if want_ecc else None,
+                "ecc_used_init": bool(ecc_used_init) if want_ecc else None,
+                "ecc_fallback_reason": ecc_fallback_reason if want_ecc else None,
+                "ecc_q_init": float(ecc_q_init) if ecc_q_init is not None else None,
+                "ecc_grad_ncc": float(grad_ncc_score) if grad_ncc_score is not None else None,
+                "ecc_edge_f1": float(edge_f1_score) if edge_f1_score is not None else None,
+                "ecc_q_total": float(q_total) if q_total is not None else None,
+                "ecc_quality_ok": bool(ecc_quality_ok) if ecc_quality_ok is not None else None,
+                "dual_rgb_out": str(out_dual_rgb_path) if out_dual_rgb_path else None,
+                "dual_th_out": str(out_dual_th_path) if out_dual_th_path else None,
+                "dual_sidecar": str(dual_sidecar_path) if dual_sidecar_path else None,
+                "dual_grad_ncc": float(dual_grad_ncc) if dual_grad_ncc is not None else None,
+                "dual_edge_f1": float(dual_edge_f1) if dual_edge_f1 is not None else None,
+                "dual_q_total": float(dual_q_total) if dual_q_total is not None else None,
+                "dual_shift_dx": float(dual_shift[0]) if dual_shift is not None else None,
+                "dual_shift_dy": float(dual_shift[1]) if dual_shift is not None else None,
+                "dual_shift_resp": float(dual_shift_resp) if dual_shift_resp is not None else None,
+                "dual_shift_applied": bool(dual_shift_applied),
+                "dual_warp_invalid_ratio": float(dual_invalid_ratio) if dual_invalid_ratio is not None else None,
                 "zoom_fit": float(zoom_fit) if zoom_fit is not None else None,
                 "zoom_exif": float(zoom_exif) if zoom_exif is not None else None,
+                "zoom_ecc": float(zoom_ecc) if zoom_ecc is not None else None,
+                "zoom_dual": float(zoom_dual) if zoom_dual is not None else None,
                 "expected_dzoom_fit": float(exp_dz_fit) if exp_dz_fit is not None else None,
                 "expected_f35_fit": int(exp_f35_fit) if exp_f35_fit is not None else None,
                 "expected_dzoom_exif": float(exp_dz_exif) if exp_dz_exif is not None else None,
                 "expected_f35_exif": int(exp_f35_exif) if exp_f35_exif is not None else None,
+                "expected_dzoom_ecc": float(exp_dz_ecc) if exp_dz_ecc is not None else None,
+                "expected_f35_ecc": int(exp_f35_ecc) if exp_f35_ecc is not None else None,
+                "expected_dzoom_dual": float(exp_dz_dual) if exp_dz_dual is not None else None,
+                "expected_f35_dual": int(exp_f35_dual) if exp_f35_dual is not None else None,
             }, ensure_ascii=False) + "\n")
             per_fp.flush()
 
             logger.log("INFO", f"[IMG] {pair.stem} ({idx}/{len(pairs)}) "
                                f"fit_out={'YES' if out_fit_path else 'NO'} "
                                f"exif_out={'YES' if out_exif_path else 'NO'} "
+                               f"ecc_out={'YES' if out_ecc_path else 'NO'} "
+                               f"dual_rgb={'YES' if out_dual_rgb_path else 'NO'} "
+                               f"dual_th={'YES' if out_dual_th_path else 'NO'} "
                                f"cmp={'YES' if cmp_path else 'NO'} ({dt:.2f}s)")
 
         t_apply = time.perf_counter() - t_apply0
         per_fp.close()
+
+        if want_ecc:
+            try:
+                ecc_stats_out = {
+                    "count": int(ecc_stats["count"]),
+                    "ok": int(ecc_stats["ok"]),
+                    "fail": int(ecc_stats["fail"]),
+                    "reasons": ecc_stats["reasons"],
+                    "ecc_score": ecc_stats["ecc_score"].as_dict(),
+                    "q_total": ecc_stats["q_total"].as_dict(),
+                    "grad_ncc": ecc_stats["grad_ncc"].as_dict(),
+                    "edge_f1": ecc_stats["edge_f1"].as_dict(),
+                    "worst_q": ecc_stats["worst_q"],
+                    "best_q": ecc_stats["best_q"],
+                    "fail_samples": ecc_stats["fail_samples"],
+                }
+                ecc_stats_path.write_text(json.dumps(ecc_stats_out, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                logger.log("WARN", f"[ECC] Failed to write ecc_stats: {e}")
 
         # ---- v10 debug: exif audit + sample dump/diff ----
         exiftool = find_exiftool()
@@ -1347,6 +2541,12 @@ def main() -> int:
                                         expected_w=th_w0, expected_h=th_h0, logger=logger)
             if want_exif and exif_usable and img_exif_dir.exists():
                 _write_exif_audit_jsonl(exiftool, img_exif_dir, exif_audit_path, kind="exif",
+                                        expected_w=th_w0, expected_h=th_h0, logger=logger)
+            if want_ecc and img_ecc_dir.exists():
+                _write_exif_audit_jsonl(exiftool, img_ecc_dir, exif_audit_path, kind="ecc",
+                                        expected_w=th_w0, expected_h=th_h0, logger=logger)
+            if want_dual and img_dual_dir.exists():
+                _write_exif_audit_jsonl(exiftool, img_dual_dir, exif_audit_path, kind="dual",
                                         expected_w=th_w0, expected_h=th_h0, logger=logger)
 
             # dump + diff only for the first pair (keep debug light)
@@ -1391,10 +2591,24 @@ def main() -> int:
             "comparison": bool(want_comp),
             "align": args.align,
             "stage": args.stage,
+            "ecc_motion": ecc_motion if want_ecc else None,
+            "ecc_init": ecc_init if want_ecc else None,
+            "structure_mode": structure_mode if (want_ecc or want_dual) else None,
+            "ecc_iter": int(args.ecc_iter) if want_ecc else None,
+            "ecc_eps": float(args.ecc_eps) if want_ecc else None,
+            "ecc_q_min": float(ecc_q_min) if (want_ecc and ecc_q_min is not None) else None,
+            "sfm_allow_rot": bool(allow_rot) if (want_ecc or want_dual) else None,
+            "sfm_rot_deg": float(theta_deg) if (want_ecc or want_dual) else None,
+            "sfm_max_rot_deg": float(max_theta) if (want_ecc or want_dual) else None,
+            "dual": bool(want_dual),
+            "dual_frames": int(dual_frames) if want_dual else None,
+            "dual_q_min": float(dual_q_min) if want_dual else None,
         },
         "flags": {
             "want_fit": bool(want_fit),
             "want_exif": bool(want_exif),
+            "want_ecc": bool(want_ecc),
+            "want_dual": bool(want_dual),
             "do_fit": bool(do_fit),
             "do_apply": bool(do_apply),
             "exif_usable": bool(exif_usable),
@@ -1404,18 +2618,29 @@ def main() -> int:
             "debug_dir": str(debug_dir),
             "model_fit": str(model_fit_path) if (need_fit_model and model_fit_path.exists()) else None,
             "model_exif": str(model_exif_path) if model_exif_path else None,
+            "model_dual": str(model_dual_path) if (want_dual and model_dual_path.exists()) else None,
             "image_fit_dir": str(img_fit_dir) if (do_apply and want_fit) else None,
             "image_exif_dir": str(img_exif_dir) if (do_apply and want_exif and exif_usable) else None,
+            "image_ecc_dir": str(img_ecc_dir) if (do_apply and want_ecc) else None,
+            "image_dual_dir": str(img_dual_dir) if (do_apply and want_dual) else None,
+            "thermal_dual_dir": str(th_dual_dir) if (do_apply and want_dual) else None,
+            "sidecar_ecc_dir": str(sidecar_ecc_dir) if (do_apply and want_ecc) else None,
+            "sidecar_dual_dir": str(sidecar_dual_dir) if (do_apply and want_dual) else None,
             "comparison_dir": str(comp_dir) if (do_apply and want_comp) else None,
             "run_log": str(debug_dir / f"run-{suffix}.log"),
             "per_image_jsonl": str(per_image_path) if do_apply else None,
             "exif_audit_jsonl": str(exif_audit_path) if do_apply else None,
+            "ecc_stats_json": str(ecc_stats_path) if (do_apply and want_ecc) else None,
+            "dual_stats_json": str(dual_stats_path) if (do_apply and want_dual and dual_stats_path.exists()) else None,
         },
         "counts": {
             "pairs_found": int(pairs_found),
             "pairs_processed": int(len(pairs)),
             "fit_written": int(fit_written),
             "exif_written": int(exif_written),
+            "ecc_written": int(ecc_written),
+            "dual_rgb_written": int(dual_rgb_written),
+            "dual_th_written": int(dual_th_written),
         },
         "timing": {"fit_sec": round(float(t_fit), 3), "apply_sec": round(float(t_apply), 3)},
         "exif_probe": {"usable": bool(exif_usable), "probe_ok": int(exif_ok_count), "probe_n": int(probe_n)},
@@ -1434,7 +2659,9 @@ def main() -> int:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
     logger.log("INFO", "[SUMMARY] ------------------------------")
-    logger.log("INFO", f"[SUMMARY] pairs_found={pairs_found} pairs_processed={len(pairs)} fit_written={fit_written} exif_written={exif_written}")
+    logger.log("INFO", f"[SUMMARY] pairs_found={pairs_found} pairs_processed={len(pairs)} "
+                       f"fit_written={fit_written} exif_written={exif_written} ecc_written={ecc_written} "
+                       f"dual_rgb_written={dual_rgb_written} dual_th_written={dual_th_written}")
     if need_fit_model and model_fit_path.exists():
         logger.log("INFO", f"[SUMMARY] model_fit={model_fit_path}")
     if model_exif_path:

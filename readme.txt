@@ -33,9 +33,9 @@ python run_gtgs_full_pipeline.py `
 # 逐步流程：
 # 第一步，处理RGB和T的FOV、分辨率不一致的问题：
 python cfr.py `
-  --rgb_dir "F:\databackup\GeoTGS\input\PV-r4\RGB" `
-  --th_dir  "F:\databackup\GeoTGS\input\PV-r4\thermal" `
-  --out_dir "F:\databackup\GeoTGS\input\PV-r4\fit" `
+  --rgb_dir "F:\databackup\GeoTGS-TC\input\testTCexif\RGB" `
+  --th_dir  "F:\databackup\GeoTGS-TC\input\testTCexif\thermal" `
+  --out_dir "F:\databackup\GeoTGS-TC\input\testTCexif\fit" `
   --comparison
 # 第二步，对fit和exif的结果进行评价：
 python eval_crop_metrics.py `
@@ -135,8 +135,8 @@ python train.py `
   --densification_interval 999999 --opacity_reset_interval 999999 `
   --lambda_dssim 0.05 `
   --eval
-python render.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T" -s "F:\databackup\GeoTGS\input\PV-r4\thermal_UD"
-python metrics.py -m "F:\databackup\GeoTGS\output\PV-r4\Model_T"
+python render.py -m "F:\databackup\GeoTGS-TC\output\PVpanel_full_ssnn_02_04\Model_T_pruned_AABB_clamp3_T60k_base" -s "F:\databackup\GeoTGS-TC\input\PVpanel\thermal_UD"
+python metrics.py -m "F:\databackup\GeoTGS-TC\output\PVpanel_full_ssnn_02_04\Model_T_pruned_AABB_clamp3_T60k_base"
 # 第九步，模型融合：
 python blend_model_strict_endpoints.py `
   --rgb_model_dir "F:\databackup\GeoTGS\output\PV-r4\Model_RGB" --rgb_iter 30000 `
@@ -155,7 +155,7 @@ python eval_blend_sweep.py `
   --auto_render
 # 查看模型：
 E:\3DGS\GS\gaussian-splatting\SIBR_viewers\install\bin\SIBR_gaussianViewer_app.exe `
--m F:\databackup\GeoTGS-TC\output\ss_run\ssnn_02_04
+-m "F:\databackup\GeoTGS-TC\output\PVpanel_full_ssnn_02_04\Model_T_pruned_AABB_clamp3_T60k_base"
 
 draft:
 python train.py `

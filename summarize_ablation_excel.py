@@ -86,10 +86,71 @@ def _parse_novel_view_json(path: Path) -> Dict[str, float]:
     if not isinstance(obj, dict):
         return out
     for k, v in obj.items():
+        if "OpacityHoles" in str(k):
+            continue
         fv = _to_number(v)
         if fv is not None:
             out[str(k)] = fv
     return out
+
+
+def _find_latest_iteration_ply(model_dir: Path) -> Optional[Path]:
+    pc_dir = model_dir / "point_cloud"
+    if not pc_dir.exists():
+        return None
+    best_iter = -1
+    best_ply: Optional[Path] = None
+    for child in pc_dir.iterdir():
+        if not child.is_dir():
+            continue
+        m = re.match(r"iteration_(\d+)$", child.name)
+        if not m:
+            continue
+        try:
+            it = int(m.group(1))
+        except Exception:
+            continue
+        ply = child / "point_cloud.ply"
+        if ply.exists() and it > best_iter:
+            best_iter = it
+            best_ply = ply
+    return best_ply
+
+
+def _find_latest_ckpt(model_dir: Path) -> Optional[Path]:
+    best_iter = -1
+    best_ckpt: Optional[Path] = None
+    for p in model_dir.glob("chkpnt*.pth"):
+        m = re.match(r"chkpnt(\d+)\.pth$", p.name)
+        if not m:
+            continue
+        try:
+            it = int(m.group(1))
+        except Exception:
+            continue
+        if it > best_iter:
+            best_iter = it
+            best_ckpt = p
+    return best_ckpt
+
+
+def _ply_vertex_count_header(ply_path: Path) -> Optional[int]:
+    try:
+        with ply_path.open("r", encoding="utf-8", errors="ignore") as f:
+            for _ in range(200):
+                line = f.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if line.startswith("element vertex"):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        return int(parts[2])
+                if line == "end_header":
+                    break
+    except Exception:
+        return None
+    return None
 
 
 def _parse_results_txt(path: Path) -> Dict[str, float]:
@@ -452,6 +513,7 @@ def main() -> None:
     rows_rgb: List[Dict[str, object]] = []
     rows_time: List[Dict[str, object]] = []
     rows_size: List[Dict[str, object]] = []
+    rows_lite: List[Dict[str, object]] = []
     rows_cmds: List[Dict[str, object]] = []
     rows_args: List[Dict[str, object]] = []
     rows_artifacts: List[Dict[str, object]] = []
@@ -485,6 +547,29 @@ def main() -> None:
         rows_time.append({"Experiment": exp.name, **time_cols})
         rows_size.append({"Experiment": exp.name, **size_cols})
 
+        # Offline lightweight stats (no profile_collect_* needed)
+        rgb_ply = _find_latest_iteration_ply(model_rgb)
+        t_ply = _find_latest_iteration_ply(model_t)
+        rgb_vertices = _ply_vertex_count_header(rgb_ply) if rgb_ply else None
+        t_vertices = _ply_vertex_count_header(t_ply) if t_ply else None
+        rgb_ply_bytes = rgb_ply.stat().st_size if rgb_ply and rgb_ply.exists() else None
+        t_ply_bytes = t_ply.stat().st_size if t_ply and t_ply.exists() else None
+        rgb_ckpt = _find_latest_ckpt(model_rgb)
+        t_ckpt = _find_latest_ckpt(model_t)
+        rgb_ckpt_bytes = rgb_ckpt.stat().st_size if rgb_ckpt and rgb_ckpt.exists() else None
+        t_ckpt_bytes = t_ckpt.stat().st_size if t_ckpt and t_ckpt.exists() else None
+        rows_lite.append(
+            {
+                "Experiment": exp.name,
+                "rgb_ply_vertices_offline": rgb_vertices,
+                "t_ply_vertices_offline": t_vertices,
+                "rgb_ply_bytes_offline": rgb_ply_bytes,
+                "t_ply_bytes_offline": t_ply_bytes,
+                "rgb_ckpt_bytes_offline": rgb_ckpt_bytes,
+                "t_ckpt_bytes_offline": t_ckpt_bytes,
+            }
+        )
+
         cmd_train1 = _read_cmd(exp / "cmd_train1.txt")
         cmd_train2 = _read_cmd(exp / "cmd_train2.txt")
         cmd_render = _read_cmd(exp / "cmd_render.txt")
@@ -506,6 +591,7 @@ def main() -> None:
     _write_sheet(wb, "Ablation_RGB", rows_rgb, key_sources_rgb, bold_best=True, max_width=60)
     _write_sheet(wb, "StageTime", rows_time, {}, bold_best=True, max_width=60)
     _write_sheet(wb, "SizeCount", rows_size, {}, bold_best=True, max_width=60)
+    _write_sheet(wb, "LiteStats", rows_lite, {}, bold_best=False, max_width=60)
     _write_sheet(wb, "RunArgs", rows_args, {}, bold_best=False, max_width=60)
     _write_sheet(wb, "Artifacts", rows_artifacts, {}, bold_best=False, max_width=60)
     _write_sheet(
