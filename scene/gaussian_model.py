@@ -71,6 +71,14 @@ class GaussianModel:
         self._ss_nn_dist_thr: Optional[float] = None
         self._ss_enabled: bool = False
         self._ss_logged_config: bool = False
+        # Optional SS refinement knobs (all default-off for backward compatibility)
+        self._ss_adaptive_nn: bool = False
+        self._ss_adaptive_alpha: float = 1.0
+        self._ss_adaptive_beta: float = 0.0
+        self._ss_adaptive_max_scale: float = 1.5
+        self._ss_trim_tail_pct: float = 0.0
+        self._ss_drop_small_islands: int = 0
+        self._ss_island_radius: Optional[float] = None
 
         self.setup_functions()
 
@@ -121,13 +129,30 @@ class GaussianModel:
         self._ss_nn_dist_thr = None
         self._ss_enabled = False
 
-    def set_sparse_support(self, aabb=None, index=None, nn_dist_thr=None):
+    def set_sparse_support(
+        self,
+        aabb=None,
+        index=None,
+        nn_dist_thr=None,
+        adaptive_nn: bool = False,
+        adaptive_alpha: float = 1.0,
+        adaptive_beta: float = 0.0,
+        adaptive_max_scale: float = 1.5,
+        trim_tail_pct: float = 0.0,
+        drop_small_islands: int = 0,
+        island_radius: Optional[float] = None,
+    ):
         """Enable optional sparse-support gating.
 
         Args:
             aabb: Optional tuple (lo, hi), each array-like shape (3,). If None, AABB gating is disabled.
             index: Optional VoxelHashNN-like object with .to(device) and .query_torch(xyz)->dist.
             nn_dist_thr: Optional float threshold for nearest-support distance gating.
+            adaptive_nn: If True, relax NN threshold using local spacing proxy (default off).
+            adaptive_alpha/beta/max_scale: adaptive threshold controls.
+            trim_tail_pct: Optional tail-trim percent in [0,100), removes farthest kept points after NN.
+            drop_small_islands: Optional minimum island size (points). <=0 disables.
+            island_radius: Optional voxel radius used by island grouping. None => 2*voxel_size or 2.0.
         """
         # Clear if nothing provided
         if aabb is None and index is None and nn_dist_thr is None:
@@ -162,6 +187,15 @@ class GaussianModel:
 
         # NN threshold
         self._ss_nn_dist_thr = float(nn_dist_thr) if nn_dist_thr is not None else None
+        # Optional refinement knobs (all default-off)
+        self._ss_adaptive_nn = bool(adaptive_nn)
+        self._ss_adaptive_alpha = float(adaptive_alpha)
+        self._ss_adaptive_beta = float(adaptive_beta)
+        self._ss_adaptive_max_scale = max(float(adaptive_max_scale), 1.0)
+        trim_tail_pct_f = float(trim_tail_pct)
+        self._ss_trim_tail_pct = min(max(trim_tail_pct_f, 0.0), 99.999)
+        self._ss_drop_small_islands = max(int(drop_small_islands), 0)
+        self._ss_island_radius = None if island_radius is None else max(float(island_radius), 1e-6)
         # Mark enabled only when support configuration is valid.
         self._ss_enabled = self._ss_is_enabled()
         # One-time configuration log (only when support is being set).
@@ -177,11 +211,134 @@ class GaussianModel:
                     aabb_msg = f" aabb_lo={lo} aabb_hi={hi}"
                 except Exception:
                     aabb_msg = ""
-            print(f"[INFO] SparseSupport configured: enabled={self._ss_enabled} has_aabb={has_aabb} has_index={has_index} nn_thr={nn_thr}{aabb_msg}")
+            extra_msg = (
+                f" adaptive_nn={self._ss_adaptive_nn}"
+                f" trim_tail_pct={self._ss_trim_tail_pct}"
+                f" drop_small_islands={self._ss_drop_small_islands}"
+            )
+            print(f"[INFO] SparseSupport configured: enabled={self._ss_enabled} has_aabb={has_aabb} has_index={has_index} nn_thr={nn_thr}{aabb_msg}{extra_msg}")
             self._ss_logged_config = True
 
     def _ss_is_enabled(self) -> bool:
         return (self._ss_aabb_lo is not None and self._ss_aabb_hi is not None) or (self._ss_index is not None and self._ss_nn_dist_thr is not None)
+
+    def _ss_query_nn_d1_d2(self, xyz_query):
+        """Query nearest/second-nearest support-centroid distances for adaptive NN.
+
+        Returns (d1, d2) in world units. If d2 is unavailable, values are +inf.
+        Falls back to query_torch-only when internal index fields are unavailable.
+        """
+        import torch
+        idx = self._ss_index
+        if idx is None:
+            inf = torch.full((xyz_query.shape[0],), float("inf"), dtype=torch.float32, device=xyz_query.device)
+            return inf, inf
+
+        # Fallback: only nearest distance
+        if not (hasattr(idx, "_keys_sorted") and hasattr(idx, "_coords_sorted") and hasattr(idx, "_centroids_sorted")
+                and hasattr(idx, "_pack_key") and hasattr(idx, "_get_offsets") and hasattr(idx, "to")):
+            d1 = idx.query_torch(xyz_query)
+            d2 = torch.full_like(d1, float("inf"))
+            return d1, d2
+
+        # Mirror VoxelHashNN query_torch internals and keep top-2 distances.
+        q = idx._as_torch_xyz(xyz_query)
+        if q.numel() == 0:
+            return (
+                torch.empty((0,), dtype=torch.float32, device=q.device),
+                torch.empty((0,), dtype=torch.float32, device=q.device),
+            )
+        if idx.device is None or idx._keys_sorted.device != q.device:
+            idx.to(q.device)
+        q = q.to(dtype=torch.float32)
+        q_vox = torch.floor(q / float(idx.voxel_size)).to(torch.int64)
+        r = int(getattr(idx, "default_max_voxel_radius", 2))
+        offsets = idx._get_offsets(r, q.device)
+        k = offsets.shape[0]
+        neigh_coords = q_vox[:, None, :] + offsets[None, :, :]
+        neigh_keys = idx._pack_key(neigh_coords).reshape(-1)
+        keys_sorted = idx._keys_sorted
+        m = keys_sorted.numel()
+        pos = torch.searchsorted(keys_sorted, neigh_keys)
+        pos_clamped = torch.clamp(pos, 0, max(m - 1, 0))
+        hit = (pos < m) & (keys_sorted[pos_clamped] == neigh_keys)
+        if hit.any():
+            coords_ref = idx._coords_sorted[pos_clamped]
+            coords_q = neigh_coords.reshape(-1, 3)
+            hit = hit & (coords_ref == coords_q).all(dim=-1)
+        cent = idx._centroids_sorted[pos_clamped]
+        q_rep = q.repeat_interleave(k, dim=0)
+        dist2 = (cent - q_rep).pow(2).sum(dim=-1)
+        inf2 = torch.full_like(dist2, float("inf"))
+        dist2 = torch.where(hit, dist2, inf2).view(q.shape[0], k)
+        d2_smallest, _ = torch.topk(dist2, k=min(2, k), dim=1, largest=False)
+        d1 = torch.sqrt(d2_smallest[:, 0])
+        if d2_smallest.shape[1] > 1:
+            d2 = torch.sqrt(d2_smallest[:, 1])
+        else:
+            d2 = torch.full_like(d1, float("inf"))
+        return d1, d2
+
+    def _ss_filter_small_islands(self, xyz_keep):
+        """Return boolean keep mask for xyz_keep by dropping tiny voxel islands."""
+        import torch
+        if self._ss_drop_small_islands <= 0 or xyz_keep is None or xyz_keep.numel() == 0:
+            return torch.ones((0 if xyz_keep is None else xyz_keep.shape[0],), dtype=torch.bool, device=xyz_keep.device if xyz_keep is not None else "cpu")
+
+        voxel = self._ss_island_radius
+        if voxel is None:
+            voxel = 2.0
+            if self._ss_index is not None and hasattr(self._ss_index, "voxel_size"):
+                try:
+                    voxel = max(2.0 * float(self._ss_index.voxel_size), 1e-6)
+                except Exception:
+                    voxel = 2.0
+        else:
+            voxel = max(float(voxel), 1e-6)
+
+        # CPU path: one-shot prune stage, robust and dependency-free.
+        arr = torch.floor(xyz_keep.detach().cpu() / float(voxel)).to(torch.int64).numpy()
+        if arr.shape[0] == 0:
+            return torch.zeros((0,), dtype=torch.bool, device=xyz_keep.device)
+        uniq, inv, counts = np.unique(arr, axis=0, return_inverse=True, return_counts=True)
+        m = int(uniq.shape[0])
+        if m == 0:
+            return torch.zeros((arr.shape[0],), dtype=torch.bool, device=xyz_keep.device)
+        coord2id = {tuple(uniq[i].tolist()): i for i in range(m)}
+        neighbors = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    if dx == 0 and dy == 0 and dz == 0:
+                        continue
+                    neighbors.append((dx, dy, dz))
+
+        comp = np.full((m,), -1, dtype=np.int32)
+        comp_sizes = []
+        cid = 0
+        for i in range(m):
+            if comp[i] >= 0:
+                continue
+            stack = [i]
+            comp[i] = cid
+            size_pts = 0
+            while stack:
+                u = stack.pop()
+                size_pts += int(counts[u])
+                ux, uy, uz = uniq[u]
+                for dx, dy, dz in neighbors:
+                    vid = coord2id.get((int(ux + dx), int(uy + dy), int(uz + dz)))
+                    if vid is None or comp[vid] >= 0:
+                        continue
+                    comp[vid] = cid
+                    stack.append(vid)
+            comp_sizes.append(size_pts)
+            cid += 1
+
+        comp_sizes = np.asarray(comp_sizes, dtype=np.int64)
+        keep_comp = comp_sizes >= int(self._ss_drop_small_islands)
+        keep_np = keep_comp[comp[inv]]
+        return torch.from_numpy(keep_np).to(device=xyz_keep.device, dtype=torch.bool)
 
     def _ss_gate_selected_mask(self, selected_mask, xyz_all):
         """Filter a boolean selected_mask using AABB and optional NN distance.
@@ -228,16 +385,53 @@ class GaussianModel:
 
         # Optional NN distance gating
         nn_ms = None
+        after_tail = after_aabb
+        rejected_tail = 0
+        after_island = after_aabb
+        rejected_island = 0
         if self._ss_index is not None and self._ss_nn_dist_thr is not None:
             if keep.any():
                 xyz_keep = xyz_sel[keep]
                 # query_torch must be device-native; forbid cpu/numpy conversions inside index
                 import time
                 t0 = time.perf_counter()
-                dist = self._ss_index.query_torch(xyz_keep)
+                if self._ss_adaptive_nn:
+                    dist, dist2 = self._ss_query_nn_d1_d2(xyz_keep)
+                else:
+                    dist = self._ss_index.query_torch(xyz_keep)
+                    dist2 = None
                 t1 = time.perf_counter()
                 nn_ms = (t1 - t0) * 1000.0
-                keep2 = dist <= float(self._ss_nn_dist_thr)
+                base_thr = float(self._ss_nn_dist_thr)
+                if self._ss_adaptive_nn and dist2 is not None:
+                    # Local spacing proxy: second-nearest support centroid distance.
+                    # Keep backward compatibility by applying only when adaptive_nn is enabled.
+                    thr_local = self._ss_adaptive_alpha * dist2 + self._ss_adaptive_beta
+                    thr_min = torch.full_like(dist, base_thr)
+                    thr_max = torch.full_like(dist, base_thr * self._ss_adaptive_max_scale)
+                    thr_eff = torch.where(torch.isfinite(thr_local), torch.clamp(thr_local, min=thr_min, max=thr_max), thr_min)
+                    keep2 = dist <= thr_eff
+                else:
+                    keep2 = dist <= base_thr
+
+                # Optional tail trim: drop farthest survivors by distance percentile.
+                if self._ss_trim_tail_pct > 0.0 and keep2.any():
+                    kept_dist = dist[keep2]
+                    q = torch.quantile(kept_dist, 1.0 - (self._ss_trim_tail_pct / 100.0))
+                    keep2 = keep2 & (dist <= q)
+                after_tail = int(keep2.sum().item())
+                rejected_tail = after_aabb - after_tail
+
+                # Optional small-island pruning on kept points.
+                if self._ss_drop_small_islands > 0 and keep2.any():
+                    island_keep = self._ss_filter_small_islands(xyz_keep[keep2])
+                    tmp2 = keep2.clone()
+                    kidx = torch.nonzero(keep2, as_tuple=False).squeeze(-1)
+                    tmp2[kidx] = island_keep
+                    keep2 = tmp2
+                after_island = int(keep2.sum().item())
+                rejected_island = after_tail - after_island
+
                 # scatter back
                 tmp = keep.clone()
                 tmp_idx = torch.nonzero(keep, as_tuple=False).squeeze(-1)
@@ -253,6 +447,10 @@ class GaussianModel:
             "after_nn": after_nn,
             "rejected_aabb": before - after_aabb,
             "rejected_nn": after_aabb - after_nn,
+            "after_tail": after_tail,
+            "rejected_tail": rejected_tail,
+            "after_island": after_island,
+            "rejected_island": rejected_island,
             "nn_ms": nn_ms,
         }
 

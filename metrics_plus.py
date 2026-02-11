@@ -56,6 +56,47 @@ def _sobel_mag(gray: np.ndarray) -> np.ndarray:
     return np.clip(mag, 0.0, 1.0)
 
 
+def _sobel_xy(gray: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    kx = np.array([[1, 0, -1],
+                   [2, 0, -2],
+                   [1, 0, -1]], dtype=np.float32)
+    ky = np.array([[1, 2, 1],
+                   [0, 0, 0],
+                   [-1, -2, -1]], dtype=np.float32)
+    gx = _conv3x3(gray, kx)
+    gy = _conv3x3(gray, ky)
+    return gx, gy
+
+
+def _smooth_gray(gray: np.ndarray, iters: int = 2) -> np.ndarray:
+    k = np.array([[1, 2, 1],
+                  [2, 4, 2],
+                  [1, 2, 1]], dtype=np.float32) / 16.0
+    out = gray.astype(np.float32)
+    for _ in range(max(1, int(iters))):
+        out = _conv3x3(out, k)
+    return out
+
+
+def _local_contrast_norm(gray: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    mu = _smooth_gray(gray, iters=2)
+    dev = np.abs(gray - mu)
+    sigma = _smooth_gray(dev, iters=2)
+    norm = (gray - mu) / (sigma + float(eps))
+    return np.clip(norm, -4.0, 4.0).astype(np.float32)
+
+
+def _texture_metrics_lcn(gray: np.ndarray) -> Tuple[float, float]:
+    g = _local_contrast_norm(gray)
+    gx, gy = _sobel_xy(g)
+    gm = np.hypot(gx, gy)
+    tenengrad = float(np.mean(gx * gx + gy * gy))
+    thr = float(np.mean(gm) + 0.75 * np.std(gm))
+    thr = max(thr, 1e-4)
+    edge_density = float(np.mean(gm > thr))
+    return tenengrad, edge_density
+
+
 def _laplacian(gray: np.ndarray) -> np.ndarray:
     k = np.array([[0, 1, 0],
                   [1, -4, 1],
@@ -131,6 +172,26 @@ def _bg_leak_ratio(render: np.ndarray, bg: int, thr: float = 3.0 / 255.0) -> flo
     else:
         mask = np.min(render, axis=2) >= (1.0 - thr)
     return float(np.mean(mask))
+
+
+def _air_mask_from_gt(gray_g: np.ndarray, edge_g: np.ndarray) -> np.ndarray:
+    # Empty-air proxy from GT: low-intensity + low-edge regions.
+    q_gray = float(np.percentile(gray_g, 45.0))
+    q_edge = float(np.percentile(edge_g, 40.0))
+    mask = np.logical_and(gray_g <= q_gray, edge_g <= q_edge)
+    # Keep metric stable when scene is mostly close-up.
+    if float(np.mean(mask)) < 0.05:
+        mask = gray_g <= float(np.percentile(gray_g, 30.0))
+    return mask
+
+
+def _masked_mean(arr: np.ndarray, mask: np.ndarray) -> float:
+    if arr.shape != mask.shape:
+        return 0.0
+    cnt = int(mask.sum())
+    if cnt <= 0:
+        return 0.0
+    return float(arr[mask].mean())
 
 
 def _corrcoef_safe(a: np.ndarray, b: np.ndarray) -> float:
@@ -209,6 +270,13 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             aligned_psnrs: List[float] = []
             aligned_edge_psnrs: List[float] = []
             bg_leaks: List[float] = []
+            tex_lcn_ten_r: List[float] = []
+            tex_lcn_ten_g: List[float] = []
+            tex_lcn_edge_r: List[float] = []
+            tex_lcn_edge_g: List[float] = []
+            air_edge_excess: List[float] = []
+            air_hf_mean: List[float] = []
+            air_bright_excess: List[float] = []
 
             for _, render, gt in _iter_pairs(renders_dir, gt_dir):
                 if render.shape != gt.shape:
@@ -235,6 +303,20 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 aligned_edge_psnrs.append(_aligned_psnr_gray(edge_r, edge_g, k))
                 bg_leaks.append(_bg_leak_ratio(render, bg))
 
+                # Brightness-insensitive texture clarity.
+                ten_r, ed_r = _texture_metrics_lcn(gray_r)
+                ten_g, ed_g = _texture_metrics_lcn(gray_g)
+                tex_lcn_ten_r.append(ten_r)
+                tex_lcn_ten_g.append(ten_g)
+                tex_lcn_edge_r.append(ed_r)
+                tex_lcn_edge_g.append(ed_g)
+
+                # Air cleanliness: artifact/fog proxies measured on GT-derived empty-air mask.
+                air_mask = _air_mask_from_gt(gray_g, edge_g)
+                air_edge_excess.append(_masked_mean(np.maximum(edge_r - edge_g, 0.0), air_mask))
+                air_hf_mean.append(_masked_mean(np.abs(lap_r), air_mask))
+                air_bright_excess.append(_masked_mean(np.maximum(gray_r - gray_g, 0.0), air_mask))
+
             if not edge_psnrs:
                 continue
 
@@ -251,6 +333,15 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_aligned_psnr = float(np.mean(aligned_psnrs))
             mean_aligned_edge_psnr = float(np.mean(aligned_edge_psnrs))
             mean_bg_leak = float(np.mean(bg_leaks))
+            mean_tex_ten_r = float(np.mean(tex_lcn_ten_r))
+            mean_tex_ten_g = float(np.mean(tex_lcn_ten_g))
+            tex_ten_ratio = mean_tex_ten_r / mean_tex_ten_g if mean_tex_ten_g > 0.0 else float("inf")
+            mean_tex_ed_r = float(np.mean(tex_lcn_edge_r))
+            mean_tex_ed_g = float(np.mean(tex_lcn_edge_g))
+            tex_ed_ratio = mean_tex_ed_r / mean_tex_ed_g if mean_tex_ed_g > 0.0 else float("inf")
+            mean_air_edge_excess = float(np.mean(air_edge_excess))
+            mean_air_hf = float(np.mean(air_hf_mean))
+            mean_air_bright_excess = float(np.mean(air_bright_excess))
 
             print("Method:", method)
             print(f"  EdgePSNR(mean): {_format_float(mean_edge_psnr)}")
@@ -266,6 +357,15 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  AlignedPSNR@{k}(mean): {_format_float(mean_aligned_psnr)}")
             print(f"  AlignedEdgePSNR@{k}(mean): {_format_float(mean_aligned_edge_psnr)}")
             print(f"  BgLeakRatio(mean): {_format_float(mean_bg_leak)}")
+            print(f"  TextureLCN_Tenengrad(render)(mean): {_format_float(mean_tex_ten_r)}")
+            print(f"  TextureLCN_Tenengrad(gt)(mean): {_format_float(mean_tex_ten_g)}")
+            print(f"  TextureLCN_TenengradRatio(mean): {_format_float(tex_ten_ratio)}")
+            print(f"  TextureLCN_EdgeDensity(render)(mean): {_format_float(mean_tex_ed_r)}")
+            print(f"  TextureLCN_EdgeDensity(gt)(mean): {_format_float(mean_tex_ed_g)}")
+            print(f"  TextureLCN_EdgeDensityRatio(mean): {_format_float(tex_ed_ratio)}")
+            print(f"  AirArtifactEdgeExcess(mean): {_format_float(mean_air_edge_excess)}")
+            print(f"  AirArtifactHFMean(mean): {_format_float(mean_air_hf)}")
+            print(f"  AirArtifactBrightExcess(mean): {_format_float(mean_air_bright_excess)}")
 
             full_dict[scene_dir][method] = {
                 "EdgePSNR": mean_edge_psnr,
@@ -281,6 +381,15 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "AlignedPSNR": mean_aligned_psnr,
                 "AlignedEdgePSNR": mean_aligned_edge_psnr,
                 "BgLeakRatio": mean_bg_leak,
+                "TextureLCN_Tenengrad_render": mean_tex_ten_r,
+                "TextureLCN_Tenengrad_gt": mean_tex_ten_g,
+                "TextureLCN_TenengradRatio": tex_ten_ratio,
+                "TextureLCN_EdgeDensity_render": mean_tex_ed_r,
+                "TextureLCN_EdgeDensity_gt": mean_tex_ed_g,
+                "TextureLCN_EdgeDensityRatio": tex_ed_ratio,
+                "AirArtifactEdgeExcess": mean_air_edge_excess,
+                "AirArtifactHFMean": mean_air_hf,
+                "AirArtifactBrightExcess": mean_air_bright_excess,
             }
 
         if save_json:

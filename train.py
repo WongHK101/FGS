@@ -122,8 +122,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         aabb=aabb_arg,
                         index=vhnn,
                         nn_dist_thr=nn_thr,
+                        adaptive_nn=bool(getattr(ss_args, "ss_adaptive_nn", False)),
+                        adaptive_alpha=float(getattr(ss_args, "ss_adaptive_alpha", 1.0)),
+                        adaptive_beta=float(getattr(ss_args, "ss_adaptive_beta", 0.0)),
+                        adaptive_max_scale=float(getattr(ss_args, "ss_adaptive_max_scale", 1.5)),
+                        trim_tail_pct=float(getattr(ss_args, "ss_trim_tail_pct", 0.0)),
+                        drop_small_islands=int(getattr(ss_args, "ss_drop_small_islands", 0)),
+                        island_radius=getattr(ss_args, "ss_island_radius", None),
                     )
                     print(f"[INFO] SparseSupport enabled: source={src_used}, use_aabb={use_aabb}, margin={margin}, voxel={voxel}, nn_thr={nn_thr}")
+                    if bool(getattr(ss_args, "ss_adaptive_nn", False)) or float(getattr(ss_args, "ss_trim_tail_pct", 0.0)) > 0.0 or int(getattr(ss_args, "ss_drop_small_islands", 0)) > 0:
+                        print(
+                            f"[INFO] SparseSupport refine: adaptive_nn={bool(getattr(ss_args, 'ss_adaptive_nn', False))} "
+                            f"alpha={float(getattr(ss_args, 'ss_adaptive_alpha', 1.0))} "
+                            f"beta={float(getattr(ss_args, 'ss_adaptive_beta', 0.0))} "
+                            f"max_scale={float(getattr(ss_args, 'ss_adaptive_max_scale', 1.5))} "
+                            f"trim_tail_pct={float(getattr(ss_args, 'ss_trim_tail_pct', 0.0))} "
+                            f"drop_small_islands={int(getattr(ss_args, 'ss_drop_small_islands', 0))} "
+                            f"island_radius={getattr(ss_args, 'ss_island_radius', None)}"
+                        )
 
         except Exception:
             print("[WARN] SparseSupport enabled but initialization failed; disabling sparse support.")
@@ -581,6 +598,13 @@ if __name__ == "__main__":
     parser.add_argument("--ss_aabb_margin", type=float, default=0.0)
     parser.add_argument("--ss_voxel_size", type=float, default=None)
     parser.add_argument("--ss_nn_dist_thr", type=float, default=None)
+    parser.add_argument("--ss_adaptive_nn", action="store_true", default=False)
+    parser.add_argument("--ss_adaptive_alpha", type=float, default=1.0)
+    parser.add_argument("--ss_adaptive_beta", type=float, default=0.0)
+    parser.add_argument("--ss_adaptive_max_scale", type=float, default=1.5)
+    parser.add_argument("--ss_trim_tail_pct", type=float, default=0.0)
+    parser.add_argument("--ss_drop_small_islands", type=int, default=0)
+    parser.add_argument("--ss_island_radius", type=float, default=None)
     parser.add_argument("--ss_prune_before_thermal", action="store_true", default=False)
     parser.add_argument("--ss_prune_after_rgb", action="store_true", default=False)
     parser.add_argument("--debug_gaussian_stats", action="store_true", default=False)

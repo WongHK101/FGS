@@ -208,6 +208,15 @@ def _build_ss_train_args(*pos, **kw) -> List[str]:
             _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_aabb_margin", args.ss_aabb_margin, min_value=0.0)
             _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_voxel_size", args.ss_voxel_size, strict_positive=True)
             _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_nn_dist_thr", args.ss_nn_dist_thr, min_value=0.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_adaptive_alpha", args.ss_adaptive_alpha, min_value=0.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_adaptive_beta", args.ss_adaptive_beta, min_value=0.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_adaptive_max_scale", args.ss_adaptive_max_scale, min_value=1.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_trim_tail_pct", args.ss_trim_tail_pct, min_value=0.0)
+            _validate_finite_float(ap or argparse.ArgumentParser(add_help=False), "--ss_island_radius", args.ss_island_radius, strict_positive=True)
+            if int(args.ss_drop_small_islands) < 0:
+                _err("--ss_drop_small_islands must be >= 0")
+            if float(args.ss_trim_tail_pct) >= 100.0:
+                _err("--ss_trim_tail_pct must be < 100")
         except SystemExit:
             # argparse.error triggers SystemExit; just re-raise
             raise
@@ -228,6 +237,20 @@ def _build_ss_train_args(*pos, **kw) -> List[str]:
         out += ["--ss_voxel_size", str(args.ss_voxel_size)]
     if args.ss_nn_dist_thr is not None:
         out += ["--ss_nn_dist_thr", str(args.ss_nn_dist_thr)]
+    if bool(getattr(args, "ss_adaptive_nn", False)):
+        out += ["--ss_adaptive_nn"]
+    if float(getattr(args, "ss_adaptive_alpha", 1.0)) != 1.0:
+        out += ["--ss_adaptive_alpha", str(args.ss_adaptive_alpha)]
+    if float(getattr(args, "ss_adaptive_beta", 0.0)) != 0.0:
+        out += ["--ss_adaptive_beta", str(args.ss_adaptive_beta)]
+    if float(getattr(args, "ss_adaptive_max_scale", 1.5)) != 1.5:
+        out += ["--ss_adaptive_max_scale", str(args.ss_adaptive_max_scale)]
+    if float(getattr(args, "ss_trim_tail_pct", 0.0)) > 0.0:
+        out += ["--ss_trim_tail_pct", str(args.ss_trim_tail_pct)]
+    if int(getattr(args, "ss_drop_small_islands", 0)) > 0:
+        out += ["--ss_drop_small_islands", str(args.ss_drop_small_islands)]
+    if getattr(args, "ss_island_radius", None) is not None:
+        out += ["--ss_island_radius", str(args.ss_island_radius)]
     return out
 
 
@@ -741,6 +764,48 @@ def main() -> None:
         default=None,
         help="Reserved NN distance threshold for gating (default: None)",
     )
+    ap.add_argument(
+        "--ss_adaptive_nn",
+        action="store_true",
+        default=False,
+        help="Enable adaptive NN threshold using local spacing proxy (default: off).",
+    )
+    ap.add_argument(
+        "--ss_adaptive_alpha",
+        type=float,
+        default=1.0,
+        help="Adaptive NN alpha for local spacing scale (default: 1.0).",
+    )
+    ap.add_argument(
+        "--ss_adaptive_beta",
+        type=float,
+        default=0.0,
+        help="Adaptive NN beta additive margin in world units (default: 0.0).",
+    )
+    ap.add_argument(
+        "--ss_adaptive_max_scale",
+        type=float,
+        default=1.5,
+        help="Adaptive NN max multiplier over base threshold (default: 1.5).",
+    )
+    ap.add_argument(
+        "--ss_trim_tail_pct",
+        type=float,
+        default=0.0,
+        help="Drop farthest kept NN tail percent after gating (default: 0.0, disabled).",
+    )
+    ap.add_argument(
+        "--ss_drop_small_islands",
+        type=int,
+        default=0,
+        help="Drop tiny disconnected SS islands smaller than this many points (default: 0, disabled).",
+    )
+    ap.add_argument(
+        "--ss_island_radius",
+        type=float,
+        default=None,
+        help="Island grouping voxel radius (default: None -> auto).",
+    )
 
     # Stage 2 training defaults (Thermal)
     ap.add_argument("--t_iter", type=int, default=40000)
@@ -802,6 +867,15 @@ def main() -> None:
         _validate_finite_float(ap, "--ss_aabb_margin", args.ss_aabb_margin, min_value=0.0)
         _validate_finite_float(ap, "--ss_voxel_size", args.ss_voxel_size, strict_positive=True)
         _validate_finite_float(ap, "--ss_nn_dist_thr", args.ss_nn_dist_thr, min_value=0.0)
+        _validate_finite_float(ap, "--ss_adaptive_alpha", args.ss_adaptive_alpha, min_value=0.0)
+        _validate_finite_float(ap, "--ss_adaptive_beta", args.ss_adaptive_beta, min_value=0.0)
+        _validate_finite_float(ap, "--ss_adaptive_max_scale", args.ss_adaptive_max_scale, min_value=1.0)
+        _validate_finite_float(ap, "--ss_trim_tail_pct", args.ss_trim_tail_pct, min_value=0.0)
+        _validate_finite_float(ap, "--ss_island_radius", args.ss_island_radius, strict_positive=True)
+        if int(args.ss_drop_small_islands) < 0:
+            ap.error("--ss_drop_small_islands must be >= 0")
+        if float(args.ss_trim_tail_pct) >= 100.0:
+            ap.error("--ss_trim_tail_pct must be < 100")
 
     ss_stage_override = bool(args.ss_enable_rgb) or bool(args.ss_enable_t)
     if ss_stage_override:
@@ -1105,6 +1179,13 @@ def main() -> None:
                 "ss_aabb_margin": getattr(args, "ss_aabb_margin", None),
                 "ss_voxel_size": getattr(args, "ss_voxel_size", None),
                 "ss_nn_dist_thr": getattr(args, "ss_nn_dist_thr", None),
+                "ss_adaptive_nn": bool(getattr(args, "ss_adaptive_nn", False)),
+                "ss_adaptive_alpha": getattr(args, "ss_adaptive_alpha", None),
+                "ss_adaptive_beta": getattr(args, "ss_adaptive_beta", None),
+                "ss_adaptive_max_scale": getattr(args, "ss_adaptive_max_scale", None),
+                "ss_trim_tail_pct": getattr(args, "ss_trim_tail_pct", None),
+                "ss_drop_small_islands": getattr(args, "ss_drop_small_islands", None),
+                "ss_island_radius": getattr(args, "ss_island_radius", None),
                 "ss_prune_before_thermal": bool(getattr(args, "ss_prune_before_thermal", False)),
                 "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                 "clamp_scale_max": getattr(args, "clamp_scale_max", None),
@@ -1167,6 +1248,13 @@ def main() -> None:
                     "ss_enable_rgb": bool(getattr(args, "ss_enable_rgb", False)),
                     "ss_enable_t": bool(getattr(args, "ss_enable_t", False)),
                     "ss_use_aabb": bool(getattr(args, "ss_use_aabb", True)),
+                    "ss_adaptive_nn": bool(getattr(args, "ss_adaptive_nn", False)),
+                    "ss_adaptive_alpha": getattr(args, "ss_adaptive_alpha", None),
+                    "ss_adaptive_beta": getattr(args, "ss_adaptive_beta", None),
+                    "ss_adaptive_max_scale": getattr(args, "ss_adaptive_max_scale", None),
+                    "ss_trim_tail_pct": getattr(args, "ss_trim_tail_pct", None),
+                    "ss_drop_small_islands": getattr(args, "ss_drop_small_islands", None),
+                    "ss_island_radius": getattr(args, "ss_island_radius", None),
                     "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                     "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                     "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
