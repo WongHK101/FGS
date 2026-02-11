@@ -1349,6 +1349,12 @@ def make_comparison_montage(
         ov_dual_cell = resize_keep_aspect_pad(ov_dual, cell_w, cell_h)
         put_text(ov_dual_cell, "overlay-dual", (20, 50), 1.0)
 
+    if not (force_dual or (dual_th_bgr is not None) or (img_dual_bgr is not None)):
+        # Default comparison view keeps fit/exif only and hides dual placeholders.
+        row1 = np.concatenate([vis_cell, ir_cell, exif_cell], axis=1)
+        row2 = np.concatenate([fit_cell, ov_exif_cell, ov_fit_cell], axis=1)
+        return np.concatenate([row1, row2], axis=0)
+
     row1 = np.concatenate([vis_cell, ir_cell, dual_th_cell], axis=1)
     row2 = np.concatenate([exif_cell, fit_cell, dual_rgb_cell], axis=1)
     row3 = np.concatenate([ov_exif_cell, ov_fit_cell, ov_dual_cell], axis=1)

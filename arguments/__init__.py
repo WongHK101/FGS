@@ -60,7 +60,26 @@ class ModelParams(ParamGroup):
 
     def extract(self, args):
         g = super().extract(args)
-        g.source_path = os.path.abspath(g.source_path)
+        # Backward-compatibility: older cfg_args may miss newly added fields.
+        # Ensure ModelParams always has a complete attribute set.
+        defaults = {
+            "sh_degree": self.sh_degree,
+            "source_path": self._source_path,
+            "model_path": self._model_path,
+            "images": self._images,
+            "depths": self._depths,
+            "resolution": self._resolution,
+            "white_background": self._white_background,
+            "train_test_exp": self.train_test_exp,
+            "data_device": self.data_device,
+            "eval": self.eval,
+        }
+        for k, v in defaults.items():
+            if not hasattr(g, k):
+                setattr(g, k, v)
+
+        if g.source_path is not None:
+            g.source_path = os.path.abspath(g.source_path)
         return g
 
 class PipelineParams(ParamGroup):

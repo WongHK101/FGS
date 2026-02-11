@@ -89,13 +89,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if support_t is None or support_t.ndim != 2 or support_t.shape[-1] != 3 or support_t.shape[0] == 0:
                 print("[WARN] SparseSupport enabled but support points are empty/invalid; disabling sparse support.")
             else:
-                # AABB (+ optional margin)
+                use_aabb = bool(getattr(ss_args, "ss_use_aabb", True))
+                aabb_arg = None
                 margin = float(getattr(ss_args, "ss_aabb_margin", 0.0) or 0.0)
-                lo = support_t.min(dim=0).values
-                hi = support_t.max(dim=0).values
-                if margin != 0.0:
-                    lo = lo - margin
-                    hi = hi + margin
+                if use_aabb:
+                    # AABB (+ optional margin)
+                    lo = support_t.min(dim=0).values
+                    hi = support_t.max(dim=0).values
+                    if margin != 0.0:
+                        lo = lo - margin
+                        hi = hi + margin
+                    aabb_arg = (lo, hi)
 
                 voxel = getattr(ss_args, "ss_voxel_size", None)
                 nn_thr = getattr(ss_args, "ss_nn_dist_thr", None)
@@ -110,12 +114,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # Build index on the model device; GaussianModel will cache/pin it once.
                     vhnn = _ss.VoxelHashNN(support_t, voxel_size=float(voxel))
 
-                gaussians.set_sparse_support(
-                    aabb=(lo, hi),
-                    index=vhnn,
-                    nn_dist_thr=nn_thr,
-                )
-                print(f"[INFO] SparseSupport enabled: source={src_used}, margin={margin}, voxel={voxel}, nn_thr={nn_thr}")
+                # NN-only mode: when AABB is disabled, NN params must be valid.
+                if (not use_aabb) and (vhnn is None or nn_thr is None):
+                    print("[WARN] SparseSupport: ss_use_aabb=False requires both ss_voxel_size and ss_nn_dist_thr; disabling sparse support.")
+                else:
+                    gaussians.set_sparse_support(
+                        aabb=aabb_arg,
+                        index=vhnn,
+                        nn_dist_thr=nn_thr,
+                    )
+                    print(f"[INFO] SparseSupport enabled: source={src_used}, use_aabb={use_aabb}, margin={margin}, voxel={voxel}, nn_thr={nn_thr}")
 
         except Exception:
             print("[WARN] SparseSupport enabled but initialization failed; disabling sparse support.")
@@ -439,6 +447,42 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
+    # Optional: one-shot final clamp at the end of RGB stage.
+    # This runs after normal training saves and overwrites final artifacts.
+    if getattr(args, "clamp_scale_after_rgb_final", False) and not checkpoint:
+        if args.clamp_scale_max is None:
+            print("[WARN] clamp_scale_after_rgb_final set but clamp_scale_max is None; skipping final clamp.")
+        else:
+            clamped_gauss, total, before_smax, after_smax = gaussians.clamp_scaling_max_(args.clamp_scale_max)
+            if clamped_gauss > 0:
+                print(
+                    f"[INFO] ClampScaling rgb_after_train: max_scale={args.clamp_scale_max} "
+                    f"clamped_gauss={clamped_gauss}/{total} before_smax={before_smax:.6f} after_smax={after_smax:.6f}"
+                )
+            scene.save(opt.iterations)
+            torch.save((gaussians.capture(), opt.iterations), scene.model_path + "/chkpnt" + str(opt.iterations) + ".pth")
+
+    # Optional: one-shot sparse-support prune at the end of RGB stage.
+    # This runs after normal training saves and overwrites final artifacts
+    # with the pruned model so downstream stage-2 can reuse the cleaned checkpoint.
+    if getattr(args, "ss_prune_after_rgb", False) and not checkpoint:
+        if not getattr(args, "ss_enable", False):
+            print("[WARN] ss_prune_after_rgb set but ss_enable=False; skipping prune.")
+        elif not (getattr(gaussians, "_ss_enabled", False) and gaussians._ss_is_enabled()):
+            print("[WARN] ss_prune_after_rgb set but SparseSupport not configured; skipping prune.")
+        else:
+            prune_stats = gaussians.prune_outside_sparse_support()
+            if prune_stats is not None:
+                before, after = prune_stats
+                removed = before - after
+                keep_ratio = (after / float(before)) if before > 0 else 1.0
+                print(
+                    f"[INFO] SparseSupport prune_after_rgb: before={before} after={after} "
+                    f"removed={removed} keep_ratio={keep_ratio:.6f}"
+                )
+                scene.save(opt.iterations)
+                torch.save((gaussians.capture(), opt.iterations), scene.model_path + "/chkpnt" + str(opt.iterations) + ".pth")
+
 def prepare_output_and_logger(args):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
@@ -533,13 +577,16 @@ if __name__ == "__main__":
     # Sparse Support (disabled by default): gates densification using sparse COLMAP support / init point cloud.
     parser.add_argument("--ss_enable", action="store_true", default=False)
     parser.add_argument("--ss_source", type=str, choices=["colmap_sparse", "init_pcd"], default="colmap_sparse")
+    parser.add_argument("--ss_use_aabb", type=_str2bool, nargs="?", const=True, default=True)
     parser.add_argument("--ss_aabb_margin", type=float, default=0.0)
     parser.add_argument("--ss_voxel_size", type=float, default=None)
     parser.add_argument("--ss_nn_dist_thr", type=float, default=None)
     parser.add_argument("--ss_prune_before_thermal", action="store_true", default=False)
+    parser.add_argument("--ss_prune_after_rgb", action="store_true", default=False)
     parser.add_argument("--debug_gaussian_stats", action="store_true", default=False)
     parser.add_argument("--clamp_scale_max", type=float, default=None)
     parser.add_argument("--clamp_scale_after_densify", action="store_true", default=False)
+    parser.add_argument("--clamp_scale_after_rgb_final", action="store_true", default=False)
     parser.add_argument("--thermal_reset_features", action="store_true", default=False)
     parser.add_argument("--sgf_disable", action="store_true", default=False)
 

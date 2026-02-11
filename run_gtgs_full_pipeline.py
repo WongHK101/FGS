@@ -221,6 +221,7 @@ def _build_ss_train_args(*pos, **kw) -> List[str]:
 
     # Always forward explicit SS params once enabled.
     out += ["--ss_source", str(args.ss_source)]
+    out += ["--ss_use_aabb", "true" if bool(getattr(args, "ss_use_aabb", True)) else "false"]
     out += ["--ss_aabb_margin", str(args.ss_aabb_margin)]
 
     if args.ss_voxel_size is not None:
@@ -492,6 +493,7 @@ def pick_best_candidate(
     prefer: Tuple[str, ...] = ("edge_f1", "grad_ncc", "nmi", "edge_dice", "mi"),
     mode: str = "legacy",
     edge_f1_eps: float = 0.002,
+    allowed_tags: Optional[Tuple[str, ...]] = None,
 ) -> CropCandidate:
     """
     Auto-pick best crop candidate from eval_crop_metrics summary_all.json.
@@ -518,6 +520,9 @@ def pick_best_candidate(
         )
 
     parsed = [c for c in parsed if c.count > 0 and c.rgb_dir.exists()]
+    if allowed_tags is not None:
+        allow = set(allowed_tags)
+        parsed = [c for c in parsed if c.tag in allow]
     if not parsed:
         raise RuntimeError("All candidates have count==0 or rgb_dir missing; cannot auto pick.")
 
@@ -594,6 +599,19 @@ def pick_best_candidate(
     shortlist.sort(key=robust_key_fn, reverse=True)
     return shortlist[0]
 
+def _summary_tags(path: Path) -> set:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    tags = set()
+    for c in obj.get("candidates", []):
+        if isinstance(c, dict):
+            t = c.get("tag")
+            if isinstance(t, str) and t:
+                tags.add(t)
+    return tags
+
 
 # ----------------------------
 # Pipeline
@@ -631,14 +649,14 @@ def main() -> None:
     ap.add_argument("--skip_blend", action="store_true", help="Skip blending + sweep eval")
     ap.add_argument("--save_cmds", action="store_true", default=False,
                     help="Save stage commands to out_root/cmd_*.txt (default: off)")
-    ap.add_argument("--run_metrics_plus", action="store_true", default=False,
-                    help="Run metrics_plus.py after metrics.py (default: off)")
+    ap.add_argument("--run_metrics_plus", action="store_true", default=True,
+                    help="Run metrics_plus.py after metrics.py (default: on)")
     ap.add_argument("--metrics_plus_K", type=int, default=8,
                     help="AlignedPSNR search window for metrics_plus.py (default: 8)")
     ap.add_argument("--metrics_plus_bg", type=int, default=0, choices=[0, 1],
                     help="Background color for metrics_plus.py (default: 0)")
-    ap.add_argument("--run_novel_view_metrics", action="store_true", default=False,
-                    help="Run novel_view_metrics.py after thermal metrics (default: off)")
+    ap.add_argument("--run_novel_view_metrics", action="store_true", default=True,
+                    help="Run novel_view_metrics.py after thermal metrics (default: on)")
     ap.add_argument("--novel_view_N", type=int, default=60,
                     help="Number of novel views for novel_view_metrics.py (default: 60)")
     ap.add_argument("--novel_bg", type=int, default=0, choices=[0, 1],
@@ -698,6 +716,14 @@ def main() -> None:
         help="Sparse support source (default: colmap_sparse)",
     )
     ap.add_argument(
+        "--ss_use_aabb",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=True,
+        help="Use AABB gate before NN (default: true). Set false for NN-only gating.",
+    )
+    ap.add_argument(
         "--ss_aabb_margin",
         type=float,
         default=0.0,
@@ -720,13 +746,19 @@ def main() -> None:
     ap.add_argument("--t_iter", type=int, default=40000)
     ap.add_argument("--t_res", type=int, default=1)
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
+    ap.add_argument("--t_opacity_lr", type=float, default=0.0,
+                    help="Thermal-only opacity lr (default: 0.0, keeps legacy frozen opacity)")
     ap.add_argument("--t_lambda_dssim", type=float, default=0.05)
     ap.add_argument("--ss_prune_before_thermal", action="store_true", default=False,
                     help="Thermal-only: prune outside sparse support after restore (default: off)")
+    ap.add_argument("--ss_prune_after_rgb", action="store_true", default=False,
+                    help="RGB-only: prune outside sparse support once after stage-1 training (default: off)")
     ap.add_argument("--clamp_scale_max", type=float, default=None,
                     help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
     ap.add_argument("--clamp_scale_max_rgb", type=float, default=None,
                     help="RGB-only: clamp max gaussian scale after densify (default: None)")
+    ap.add_argument("--clamp_scale_after_rgb_final", action="store_true", default=False,
+                    help="RGB-only: clamp once after stage-1 training finishes (default: off)")
     ap.add_argument("--clamp_scale_max_t", type=float, default=None,
                     help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
     ap.add_argument("--thermal_reset_features", action="store_true", default=False,
@@ -762,6 +794,8 @@ def main() -> None:
     # Validate improvement-4 params (always validated; only forwarded when enabled)
     if not math.isfinite(float(getattr(args, "t_struct_grad_w", 0.0))) or float(getattr(args, "t_struct_grad_w", 0.0)) < 0.0:
         ap.error("--t_struct_grad_w must be a finite float >= 0")
+    if not math.isfinite(float(getattr(args, "t_opacity_lr", 0.0))) or float(getattr(args, "t_opacity_lr", 0.0)) < 0.0:
+        ap.error("--t_opacity_lr must be a finite float >= 0")
     # Sparse Support argument sanity (only when enabled for any stage)
     ss_any_enabled = bool(args.ss_enable or args.ss_enable_rgb or args.ss_enable_t)
     if ss_any_enabled:
@@ -1067,17 +1101,21 @@ def main() -> None:
                 "ss_enable_rgb": bool(getattr(args, "ss_enable_rgb", False)),
                 "ss_enable_t": bool(getattr(args, "ss_enable_t", False)),
                 "ss_source": getattr(args, "ss_source", None),
+                "ss_use_aabb": bool(getattr(args, "ss_use_aabb", True)),
                 "ss_aabb_margin": getattr(args, "ss_aabb_margin", None),
                 "ss_voxel_size": getattr(args, "ss_voxel_size", None),
                 "ss_nn_dist_thr": getattr(args, "ss_nn_dist_thr", None),
                 "ss_prune_before_thermal": bool(getattr(args, "ss_prune_before_thermal", False)),
+                "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                 "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                 "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
+                "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
                 "clamp_scale_max_t": getattr(args, "clamp_scale_max_t", None),
                 "clamp_effective_rgb": clamp_effective_rgb,
                 "clamp_effective_t": clamp_effective_t,
                 "thermal_reset_features": bool(getattr(args, "thermal_reset_features", False)),
                 "sgf_disable": bool(getattr(args, "sgf_disable", False)),
+                "t_opacity_lr": getattr(args, "t_opacity_lr", None),
                 "debug_gaussian_stats": bool(getattr(args, "debug_gaussian_stats", False)),
                 "save_cmds": bool(getattr(args, "save_cmds", False)),
                 "run_metrics_plus": bool(getattr(args, "run_metrics_plus", False)),
@@ -1128,11 +1166,15 @@ def main() -> None:
                     "ss_enable": bool(getattr(args, "ss_enable", False)),
                     "ss_enable_rgb": bool(getattr(args, "ss_enable_rgb", False)),
                     "ss_enable_t": bool(getattr(args, "ss_enable_t", False)),
+                    "ss_use_aabb": bool(getattr(args, "ss_use_aabb", True)),
+                    "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                     "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                     "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
+                    "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
                     "clamp_scale_max_t": getattr(args, "clamp_scale_max_t", None),
                     "clamp_effective_rgb": clamp_effective_rgb,
                     "clamp_effective_t": clamp_effective_t,
+                    "t_opacity_lr": getattr(args, "t_opacity_lr", None),
                 },
             },
             "steps": _json_safe(profile_steps),
@@ -1185,6 +1227,8 @@ def main() -> None:
     cand_ecc = fit_dir / "image" / "image-ecc"
     cand_dual = fit_dir / "image" / "image-dual"
     th_dual = fit_dir / "thermal" / "thermal-dual"
+    need_ecc = (args.align == "ecc")
+    need_dual = (args.align == "dual")
 
     # -------- 1) CFR
     if args.clean_fit and fit_dir.exists():
@@ -1192,19 +1236,24 @@ def main() -> None:
         shutil.rmtree(fit_dir)
 
     cfr_align = "both"
-    if args.align == "ecc":
+    if need_ecc:
         cfr_align = "all"
     cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir),
-               "--align", cfr_align, "--stage", "both", "--dual", "--comparison"]
+               "--align", cfr_align, "--stage", "both"]
+    if need_dual:
+        cfr_cmd.append("--dual")
     if args.comparison:
         cfr_cmd.append("--comparison")
 
     cfr_outputs_ok = (
-        cand_fit.exists() and cand_exif.exists() and cand_dual.exists() and th_dual.exists() and
-        (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0) and
-        (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+        cand_fit.exists() and cand_exif.exists() and
+        (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
     )
-    if args.align == "ecc":
+    if need_dual:
+        cfr_outputs_ok = cfr_outputs_ok and cand_dual.exists() and th_dual.exists() and (
+            (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+        )
+    if need_ecc:
         cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
     if not _in_step_range(1):
         eprint("[SKIP] 01_cfr (outside selected step range)")
@@ -1218,27 +1267,34 @@ def main() -> None:
             maybe_run(cfr_cmd, cwd=gs_root, step_name="01_cfr")
             # re-evaluate
             cfr_outputs_ok = (
-                cand_fit.exists() and cand_exif.exists() and cand_dual.exists() and th_dual.exists() and
-                (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0) and
-                (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+                cand_fit.exists() and cand_exif.exists() and
+                (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
             )
-            if args.align == "ecc":
+            if need_dual:
+                cfr_outputs_ok = cfr_outputs_ok and cand_dual.exists() and th_dual.exists() and (
+                    (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
+                )
+            if need_ecc:
                 cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
             if not cfr_outputs_ok:
-                need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}\n  {cand_exif}\n  {cand_dual}\n  {th_dual}"
-                if args.align == "ecc":
+                need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}\n  {cand_exif}"
+                if need_dual:
+                    need_msg += f"\n  {cand_dual}\n  {th_dual}"
+                if need_ecc:
                     need_msg += f"\n  {cand_ecc}"
                 _maybe_raise_file_not_found(need_msg)
             _record_step("01_cfr", "run", cfr_cmd, outputs_ok=cfr_outputs_ok)
             write_marker(marker_path(state_dir, "01_cfr"), "01_cfr", cfr_cmd, cwd=gs_root)
 
-    # -------- 2) Evaluate crop candidates (fit + exif + dual)
+    # -------- 2) Evaluate crop candidates (default: fit + exif)
     ensure_dir(metrics_out)
     summary_all = metrics_out / "summary_all.json"
     metrics_rgb = metrics_out / "crop_rgb"
-    metrics_dual = metrics_out / "crop_dual"
     ensure_dir(metrics_rgb)
-    ensure_dir(metrics_dual)
+    metrics_dual = metrics_out / "crop_dual"
+    eval_dual = need_dual
+    if eval_dual:
+        ensure_dir(metrics_dual)
     eval_cmd_base = [py, "eval_crop_metrics.py", "--th_dir", str(th_dir),
                      "--rgb_dir", str(cand_fit), "--rgb_dir", str(cand_exif),
                      "--tag", "fit", "--tag", "exif",
@@ -1248,6 +1304,15 @@ def main() -> None:
                      "--tag", "dual",
                      "--out_dir", str(metrics_dual)]
     eval_outputs_ok = summary_all.exists() and summary_all.stat().st_size > 50
+    if eval_outputs_ok:
+        tags = _summary_tags(summary_all)
+        if not {"fit", "exif"}.issubset(tags):
+            eval_outputs_ok = False
+        if eval_dual:
+            eval_outputs_ok = eval_outputs_ok and ("dual" in tags)
+        else:
+            # Default path should not auto-pick dual from stale summaries.
+            eval_outputs_ok = eval_outputs_ok and ("dual" not in tags)
 
     if not _in_step_range(2):
 
@@ -1267,18 +1332,22 @@ def main() -> None:
                 eprint("[WARN] eval_crop_metrics.py failed with --ssim. Retrying without --ssim ...")
                 maybe_run(eval_cmd_base, cwd=gs_root, step_name="02_eval_crop_rgb")
 
-            try:
-                maybe_run(eval_cmd_dual + ["--ssim"], cwd=gs_root, step_name="02_eval_crop_dual")
-            except subprocess.CalledProcessError:
-                eprint("[WARN] eval_crop_metrics.py (dual) failed with --ssim. Retrying without --ssim ...")
-                maybe_run(eval_cmd_dual, cwd=gs_root, step_name="02_eval_crop_dual")
+            if eval_dual:
+                try:
+                    maybe_run(eval_cmd_dual + ["--ssim"], cwd=gs_root, step_name="02_eval_crop_dual")
+                except subprocess.CalledProcessError:
+                    eprint("[WARN] eval_crop_metrics.py (dual) failed with --ssim. Retrying without --ssim ...")
+                    maybe_run(eval_cmd_dual, cwd=gs_root, step_name="02_eval_crop_dual")
 
             # merge summaries into metrics_out/summary_all.json (+ csv)
             try:
                 rgb_all = json.loads((metrics_rgb / "summary_all.json").read_text(encoding="utf-8"))
-                dual_all = json.loads((metrics_dual / "summary_all.json").read_text(encoding="utf-8"))
+                objs = [rgb_all]
+                if eval_dual:
+                    dual_all = json.loads((metrics_dual / "summary_all.json").read_text(encoding="utf-8"))
+                    objs.append(dual_all)
                 cands = []
-                for obj in (rgb_all, dual_all):
+                for obj in objs:
                     for c in obj.get("candidates", []):
                         if c and isinstance(c, dict):
                             cands.append(c)
@@ -1328,6 +1397,7 @@ def main() -> None:
             summary_all,
             mode=args.auto_pick_mode,
             edge_f1_eps=args.auto_pick_edge_f1_eps,
+            allowed_tags=("fit", "exif") if (not need_dual and not need_ecc) else None,
         )
         chosen_tag = best.tag
         chosen_dir = best.rgb_dir
@@ -1455,8 +1525,12 @@ def main() -> None:
     # Forward sparse support opts only when enabled for RGB stage.
     if ss_train_extra:
         train1_cmd.extend(ss_train_extra)
+    if args.ss_prune_after_rgb:
+        train1_cmd.append("--ss_prune_after_rgb")
     if clamp_effective_rgb is not None:
         train1_cmd.extend(["--clamp_scale_max", str(clamp_effective_rgb), "--clamp_scale_after_densify"])
+    if args.clamp_scale_after_rgb_final:
+        train1_cmd.append("--clamp_scale_after_rgb_final")
 
     train1_outputs_ok = ckpt_rgb.exists()
     if not _in_step_range(5):
@@ -1512,7 +1586,7 @@ def main() -> None:
             maybe_run(metrics1_cmd, cwd=gs_root, step_name="07_metrics_rgb")
             if args.run_metrics_plus:
                 metrics_plus_cmd = [py, "metrics_plus.py", "-m", str(model_rgb),
-                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg)]
+                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg), "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="07_metrics_rgb")
             _record_step("07_metrics_rgb", "run", metrics1_cmd, outputs_ok=metrics1_outputs_ok)
             # even if we can't detect output, write marker so reruns can skip
@@ -1607,7 +1681,7 @@ def main() -> None:
         # Freeze geometry-related params
         "--position_lr_init", "0", "--position_lr_final", "0",
         "--scaling_lr", "0", "--rotation_lr", "0",
-        "--opacity_lr", "0",
+        "--opacity_lr", str(args.t_opacity_lr),
 
         "--feature_lr", str(args.t_feature_lr),
 
@@ -1712,7 +1786,7 @@ def main() -> None:
             maybe_run(metrics2_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_metrics_plus:
                 metrics_plus_cmd = [py, "metrics_plus.py", "-m", str(model_t),
-                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg)]
+                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg), "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_novel_view_metrics:
                 novel_cmd = [py, "novel_view_metrics.py", "-m", str(model_t),
