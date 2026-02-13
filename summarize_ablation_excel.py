@@ -11,13 +11,139 @@ from typing import Dict, List, Optional, Set, Tuple
 
 try:
     from openpyxl import Workbook
-    from openpyxl.styles import Font
+    from openpyxl.styles import Alignment, Font, PatternFill
 except Exception as exc:
     raise SystemExit("openpyxl is required for this script. Install it in your environment.") from exc
 
 
 def _warn(msg: str) -> None:
     print(f"[WARN] {msg}")
+
+
+# Compact view columns (kept intentionally small and stable).
+CORE_T_COLUMNS = [
+    "T_SCORE_SGF_Composite",
+    "T_SGF_MetricsPlusScore",
+    "T_SGF_NovelQualityScore",
+    "T_SGF_StructureNearScore",
+    "T_SGF_CleanFarScore",
+    "T_SCORE_SGF_Main",
+    "T_SCORE_Structure",
+    "T_SCORE_Clean",
+    "T_SCORE_Stability",
+    "T_SCORE_Fidelity",
+    "T_PSNR",
+    "T_SSIM",
+    "T_LPIPS",
+    "T_TextureTenengrad_d00_mean",
+    "T_TextureTenengrad_d01_mean",
+    "T_AirArtifactScore_d02_mean",
+    "T_AirArtifactScore_d03_mean",
+    "T_SpikeScore_air_d02_mean",
+    "T_SpikeScore_air_d03_mean",
+    "T_BgSensitivityRatio_d02_mean",
+    "T_BgSensitivityRatio_d03_mean",
+    "T_SpikeScore_d02_mean",
+    "T_SpikeScore_d03_mean",
+    "T_BgSensitivityRatio",
+    "T_SpikeScore_air_mean",
+    "T_BgLeakRatio_mean",
+    "T_SpikeScore_mean",
+    "T_AlignedGradientCorr",
+    "T_AlignedEdgeF1",
+    "T_EdgeF1_best",
+    "T_AirMaskRatio",
+    "T_TextureLCN_TenengradRatio",
+    "T_AirArtifactHFMean",
+    "T_TemporalFlicker_mean",
+    "T_BgLeakRatio_d00_mean",
+    "T_BgLeakRatio_d01_mean",
+    "T_BgLeakRatio_d02_mean",
+    "T_BgLeakRatio_d03_mean",
+]
+
+CORE_RGB_COLUMNS = [
+    "RGB_PSNR",
+    "RGB_SSIM",
+    "RGB_LPIPS",
+    "RGB_EdgePSNR",
+]
+
+OVERVIEW_COLUMNS = [
+    "T_SCORE_SGF_Composite",
+    "T_SGF_MetricsPlusScore",
+    "T_SGF_NovelQualityScore",
+    "T_SCORE_SGF_Main",
+    "T_SCORE_Structure",
+    "T_SCORE_Clean",
+    "T_SCORE_Stability",
+    "T_PSNR",
+    "T_SSIM",
+    "T_LPIPS",
+    "T_BgLeakRatio_mean",
+    "T_BgSensitivityRatio",
+    "T_SpikeScore_mean",
+    "T_SpikeScore_air_mean",
+    "T_AlignedGradientCorr",
+    "T_AlignedEdgeF1",
+    "T_EdgeF1_best",
+    "T_TextureLCN_TenengradRatio",
+    "T_AirArtifactHFMean",
+    "T_TemporalFlicker_mean",
+    "RGB_PSNR",
+    "RGB_SSIM",
+    "RGB_LPIPS",
+    "time_total_s",
+    "time_10_train_thermal_s",
+    "time_11_render_thermal_s",
+    "time_12_metrics_thermal_s",
+    "t_ply_vertices_offline",
+    "t_ply_bytes_offline",
+    "t_ckpt_bytes_offline",
+]
+
+ABLATION_T_PREFERRED = CORE_T_COLUMNS + [
+    "time_total_s",
+    "time_10_train_thermal_s",
+    "time_11_render_thermal_s",
+    "time_12_metrics_thermal_s",
+]
+
+ABLATION_RGB_PREFERRED = CORE_RGB_COLUMNS + [
+    "RGB_AlignedPSNR",
+    "RGB_AlignedEdgePSNR",
+]
+
+SGF_MAIN_COLUMNS = [
+    "T_SCORE_SGF_Composite",
+    "T_SGF_MetricsPlusScore",
+    "T_SGF_NovelQualityScore",
+    "T_SGF_StructureNearScore",
+    "T_SGF_CleanFarScore",
+    "T_SCORE_SGF_Main",
+    "T_SCORE_Structure",
+    "T_SCORE_Clean",
+    "T_SCORE_Stability",
+    "T_SCORE_Fidelity",
+    "T_TextureTenengrad_d00_mean",
+    "T_TextureTenengrad_d01_mean",
+    "T_AirArtifactScore_d02_mean",
+    "T_AirArtifactScore_d03_mean",
+    "T_SpikeScore_air_d02_mean",
+    "T_SpikeScore_air_d03_mean",
+    "T_BgSensitivityRatio_d02_mean",
+    "T_BgSensitivityRatio_d03_mean",
+    "T_SpikeScore_d02_mean",
+    "T_SpikeScore_d03_mean",
+    "T_AlignedGradientCorr",
+    "T_AlignedEdgeF1",
+    "T_EdgeF1_best",
+    "T_AirMaskRatio",
+    "T_TemporalFlicker_mean",
+    "T_PSNR",
+    "T_SSIM",
+    "T_LPIPS",
+]
 
 
 def _to_number(v) -> Optional[float]:
@@ -181,6 +307,8 @@ def _collect_model_metrics(model_dir: Path, label: str) -> Tuple[Dict[str, float
     results_json = model_dir / "results.json"
     results_txt = model_dir / "results.txt"
     results_plus = model_dir / "results_plus.json"
+    novel_json_grid = model_dir / "novel_views_grid" / "novel_view_metrics_grid.json"
+    novel_json_grid_alt = model_dir / "novel_view_metrics_grid.json"
     novel_json = model_dir / "novel_view_metrics.json"
     novel_json_alt = model_dir / "novel_views" / "novel_view_metrics.json"
 
@@ -204,14 +332,19 @@ def _collect_model_metrics(model_dir: Path, label: str) -> Tuple[Dict[str, float
     else:
         _warn(f"Missing results_plus.json in {model_dir} ({label})")
 
-    if novel_json.exists() or novel_json_alt.exists():
-        target = novel_json if novel_json.exists() else novel_json_alt
+    novel_candidates = [novel_json_grid, novel_json_grid_alt, novel_json, novel_json_alt]
+    target = None
+    for c in novel_candidates:
+        if c.exists():
+            target = c
+            break
+    if target is not None:
         vals = _parse_novel_view_json(target)
         for k, v in vals.items():
             record[k] = v
             sources.setdefault(k, set()).add("novel")
     else:
-        _warn(f"Missing novel_view_metrics.json in {model_dir} ({label})")
+        _warn(f"Missing novel_view_metrics(.json/_grid.json) in {model_dir} ({label})")
 
     return record, sources
 
@@ -390,6 +523,218 @@ def _collect_columns(rows: List[Dict[str, object]], preferred: Optional[List[str
     return cols
 
 
+def _collect_exact_columns(rows: List[Dict[str, object]], wanted: List[str]) -> List[str]:
+    if not wanted:
+        return _collect_columns(rows)
+    present: Set[str] = set()
+    for r in rows:
+        present.update(r.keys())
+    cols: List[str] = ["Experiment"]
+    for k in wanted:
+        if k in present:
+            cols.append(k)
+    return cols
+
+
+def _is_low_variation_column(rows: List[Dict[str, object]], key: str, rel_thr: float = 0.005) -> bool:
+    values: List[float] = []
+    for r in rows:
+        fv = _to_number(r.get(key))
+        if fv is not None:
+            values.append(fv)
+    if len(values) < 3:
+        return False
+    v_min = min(values)
+    v_max = max(values)
+    span = v_max - v_min
+    if span <= 1e-12:
+        return True
+    mean_abs = sum(abs(v) for v in values) / len(values)
+    if mean_abs < 1e-6:
+        return span < 1e-4
+    return (span / mean_abs) < rel_thr
+
+
+def _suggest_hidden_columns(rows: List[Dict[str, object]], core_cols: Set[str]) -> Set[str]:
+    keys: Set[str] = set()
+    for r in rows:
+        keys.update(r.keys())
+    hidden: Set[str] = set()
+    for k in keys:
+        if k == "Experiment":
+            continue
+        kl = k.lower()
+        if k in core_cols:
+            continue
+        if kl.endswith("_count") or "_count" in kl:
+            hidden.add(k)
+            continue
+        if kl.endswith("_gt") or kl.endswith("_render"):
+            hidden.add(k)
+            continue
+        if "aligned" in kl:
+            hidden.add(k)
+            continue
+        if "edgel1" in kl:
+            hidden.add(k)
+            continue
+        if "topdown" in kl:
+            hidden.add(k)
+            continue
+        if _is_low_variation_column(rows, k):
+            hidden.add(k)
+            continue
+    return hidden
+
+
+def _hide_non_core_columns(rows: List[Dict[str, object]], keep_cols: Set[str]) -> Set[str]:
+    keys: Set[str] = set()
+    for r in rows:
+        keys.update(r.keys())
+    hidden: Set[str] = set()
+    for k in keys:
+        if k == "Experiment":
+            continue
+        if k not in keep_cols:
+            hidden.add(k)
+    return hidden
+
+
+def _metric_min_max(rows: List[Dict[str, object]], key: str) -> Optional[Tuple[float, float]]:
+    vals: List[float] = []
+    for r in rows:
+        fv = _to_number(r.get(key))
+        if fv is not None:
+            vals.append(fv)
+    if not vals:
+        return None
+    return min(vals), max(vals)
+
+
+def _norm01(v: Optional[float], mn: float, mx: float, prefer_high: bool) -> Optional[float]:
+    if v is None:
+        return None
+    if abs(mx - mn) <= 1e-12:
+        return 0.5
+    x = (v - mn) / (mx - mn)
+    x = max(0.0, min(1.0, x))
+    return x if prefer_high else (1.0 - x)
+
+
+def _weighted_norm_score(
+    row: Dict[str, object],
+    rules: List[Tuple[str, bool, float]],
+    stats: Dict[str, Tuple[float, float]],
+) -> Optional[float]:
+    num = 0.0
+    den = 0.0
+    for key, prefer_high, w in rules:
+        if w <= 0:
+            continue
+        mm = stats.get(key)
+        if mm is None:
+            continue
+        fv = _to_number(row.get(key))
+        nv = _norm01(fv, mm[0], mm[1], prefer_high)
+        if nv is None:
+            continue
+        num += w * nv
+        den += w
+    if den <= 0:
+        return None
+    return num / den
+
+
+def _attach_sgf_scores(rows_t: List[Dict[str, object]], key_sources_t: Dict[str, Set[str]]) -> None:
+    # Score design:
+    # - Structure: near-view texture/line clarity.
+    # - Clean: mid/far artifact suppression.
+    # - Stability: temporal flicker suppression.
+    # - Fidelity: keep PSNR/SSIM/LPIPS as weak reference.
+    structure_rules = [
+        ("T_TextureLCN_TenengradRatio", True, 0.30),
+        ("T_TextureTenengrad_d00_mean", True, 0.40),
+        ("T_TextureTenengrad_d01_mean", True, 0.30),
+    ]
+    clean_rules = [
+        ("T_AirArtifactScore_d02_mean", False, 0.25),
+        ("T_AirArtifactScore_d03_mean", False, 0.25),
+        ("T_SpikeScore_d02_mean", False, 0.20),
+        ("T_SpikeScore_d03_mean", False, 0.20),
+        ("T_BgLeakRatio_d02_mean", False, 0.05),
+        ("T_BgLeakRatio_d03_mean", False, 0.05),
+    ]
+    stability_rules = [
+        ("T_TemporalFlicker_mean", False, 1.00),
+    ]
+    fidelity_rules = [
+        ("T_PSNR", True, 0.34),
+        ("T_SSIM", True, 0.33),
+        ("T_LPIPS", False, 0.33),
+    ]
+
+    all_metric_keys: Set[str] = set()
+    for rule_set in (structure_rules, clean_rules, stability_rules, fidelity_rules):
+        for k, _, _ in rule_set:
+            all_metric_keys.add(k)
+    stats: Dict[str, Tuple[float, float]] = {}
+    for k in all_metric_keys:
+        mm = _metric_min_max(rows_t, k)
+        if mm is not None:
+            stats[k] = mm
+
+    for row in rows_t:
+        s_struct = _weighted_norm_score(row, structure_rules, stats)
+        s_clean = _weighted_norm_score(row, clean_rules, stats)
+        s_stable = _weighted_norm_score(row, stability_rules, stats)
+        s_fit = _weighted_norm_score(row, fidelity_rules, stats)
+        row["T_SCORE_Structure"] = s_struct
+        row["T_SCORE_Clean"] = s_clean
+        row["T_SCORE_Stability"] = s_stable
+        row["T_SCORE_Fidelity"] = s_fit
+
+        main_num = 0.0
+        main_den = 0.0
+        for s, w in [
+            (s_struct, 0.45),
+            (s_clean, 0.40),
+            (s_stable, 0.10),
+            (s_fit, 0.05),
+        ]:
+            if s is None:
+                continue
+            main_num += s * w
+            main_den += w
+        row["T_SCORE_SGF_Main"] = (main_num / main_den) if main_den > 0 else None
+
+        # Composite SGF score: combine novel-view no-ref score + metrics_plus score + derived fallback.
+        sgf_novel = _to_number(row.get("T_SGF_NovelQualityScore"))
+        sgf_mplus = _to_number(row.get("T_SGF_MetricsPlusScore"))
+        sgf_derived = _to_number(row.get("T_SCORE_SGF_Main"))
+        c_num = 0.0
+        c_den = 0.0
+        for s, w in [
+            (sgf_novel, 0.45),
+            (sgf_mplus, 0.45),
+            (sgf_derived, 0.10),
+        ]:
+            if s is None:
+                continue
+            c_num += s * w
+            c_den += w
+        row["T_SCORE_SGF_Composite"] = (c_num / c_den) if c_den > 0 else sgf_derived
+
+    for k in [
+        "T_SCORE_SGF_Composite",
+        "T_SCORE_SGF_Main",
+        "T_SCORE_Structure",
+        "T_SCORE_Clean",
+        "T_SCORE_Stability",
+        "T_SCORE_Fidelity",
+    ]:
+        key_sources_t.setdefault(k, set()).add("derived")
+
+
 def _write_sheet(
     wb: Workbook,
     title: str,
@@ -398,6 +743,8 @@ def _write_sheet(
     *,
     bold_best: bool = True,
     preferred_cols: Optional[List[str]] = None,
+    exact_cols: Optional[List[str]] = None,
+    hidden_cols: Optional[Set[str]] = None,
     max_width: int = 60,
 ) -> None:
     if wb.sheetnames and wb.active.title == "Sheet" and title == "Ablation_T":
@@ -406,20 +753,30 @@ def _write_sheet(
     else:
         ws = wb.create_sheet(title)
 
-    cols = _collect_columns(rows, preferred=preferred_cols)
-    ws.freeze_panes = "B2"
+    if exact_cols is not None:
+        cols = _collect_exact_columns(rows, exact_cols)
+    else:
+        cols = _collect_columns(rows, preferred=preferred_cols)
+    ws.freeze_panes = "B3"
     header_font = Font(bold=True)
+    note_font = Font(size=9, italic=True, color="666666")
 
     for col_idx, key in enumerate(cols, start=1):
         cell = ws.cell(row=1, column=col_idx, value=key)
         cell.font = header_font
+        note = _metric_note(key, (key_sources or {}).get(key, set()))
+        note_cell = ws.cell(row=2, column=col_idx, value=note)
+        note_cell.font = note_font
+        note_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
-    for row_idx, r in enumerate(rows, start=2):
+    data_row_start = 3
+    for row_idx, r in enumerate(rows, start=data_row_start):
         for col_idx, key in enumerate(cols, start=1):
             ws.cell(row=row_idx, column=col_idx, value=r.get(key, None))
 
     if bold_best:
         bold_font = Font(bold=True)
+        best_fill = PatternFill(fill_type="solid", fgColor="FFF4CC")
         for col_idx, key in enumerate(cols, start=1):
             if key == "Experiment":
                 continue
@@ -427,7 +784,7 @@ def _write_sheet(
             if pref is None:
                 continue
             values: List[Tuple[int, float]] = []
-            for row_idx in range(2, 2 + len(rows)):
+            for row_idx in range(data_row_start, data_row_start + len(rows)):
                 v = ws.cell(row=row_idx, column=col_idx).value
                 fv = _to_number(v)
                 if fv is not None:
@@ -437,21 +794,33 @@ def _write_sheet(
             best = max(v for _, v in values) if pref == "high" else min(v for _, v in values)
             for row_idx, v in values:
                 if abs(v - best) <= 1e-9:
-                    ws.cell(row=row_idx, column=col_idx).font = bold_font
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.font = bold_font
+                    cell.fill = best_fill
 
     for col_idx, key in enumerate(cols, start=1):
         max_len = len(str(key))
-        for row_idx in range(2, 2 + len(rows)):
+        note_v = ws.cell(row=2, column=col_idx).value
+        if note_v is not None:
+            max_len = max(max_len, len(str(note_v)))
+        for row_idx in range(data_row_start, data_row_start + len(rows)):
             v = ws.cell(row=row_idx, column=col_idx).value
             if v is None:
                 continue
             max_len = max(max_len, len(str(v)))
         width = max(8, min(max_width, max_len + 2))
-        ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+        col_letter = ws.cell(row=1, column=col_idx).column_letter
+        ws.column_dimensions[col_letter].width = width
+        if hidden_cols and key in hidden_cols:
+            ws.column_dimensions[col_letter].hidden = True
 
 
 def _column_preference(key: str, sources: Set[str]) -> Optional[str]:
     k = key.lower()
+    if k.startswith("t_score_") or k.startswith("rgb_score_") or k.startswith("score_"):
+        return "high"
+    if k.startswith("t_sgf_") or k.startswith("rgb_sgf_") or k.startswith("sgf_"):
+        return "high"
     if k.startswith("time_") or k.endswith("_s"):
         return "low"
     if k.startswith("size_") or ("_mb" in k) or ("_bytes" in k):
@@ -483,6 +852,8 @@ def _column_preference(key: str, sources: Set[str]) -> Optional[str]:
         "hfabsmeandiff",
         "bgleakratio",
         "bgleakratio(mean)",
+        "bgsensitivity",
+        "bgsensitivityratio",
     }
     if k in bigger:
         return "high"
@@ -493,6 +864,73 @@ def _column_preference(key: str, sources: Set[str]) -> Optional[str]:
             return "high"
         return "low"
     return None
+
+
+def _metric_note(key: str, sources: Set[str]) -> str:
+    if key == "Experiment":
+        return "experiment id"
+    pref = _column_preference(key, sources)
+    direction = "higher is better" if pref == "high" else ("lower is better" if pref == "low" else "no default best direction")
+    k = key.lower()
+    if k.startswith("t_") or k.startswith("rgb_"):
+        k = k.split("_", 1)[1]
+    if k.startswith("sgf_metricsplusscore"):
+        meaning = "sgf metrics-plus score"
+    elif k.startswith("sgf_novelqualityscore"):
+        meaning = "sgf novel-view score"
+    elif k.startswith("sgf_structurenearscore"):
+        meaning = "sgf near-structure score"
+    elif k.startswith("sgf_cleanfarscore"):
+        meaning = "sgf far-clean score"
+    elif k.startswith("score_sgf_composite"):
+        meaning = "sgf composite score"
+    if k.startswith("score_sgf_main"):
+        meaning = "sgf main score"
+    elif k.startswith("score_structure"):
+        meaning = "structure score"
+    elif k.startswith("score_clean"):
+        meaning = "artifact-clean score"
+    elif k.startswith("score_stability"):
+        meaning = "stability score"
+    elif k.startswith("score_fidelity"):
+        meaning = "fidelity score"
+    elif k.startswith("time_") or k.endswith("_s"):
+        meaning = "runtime"
+    elif k.startswith("size_") or ("_mb" in k) or ("_bytes" in k):
+        meaning = "size"
+    elif "count_" in k or "vertices" in k or "points" in k or "gaussians" in k:
+        meaning = "count"
+    elif "psnr" in k and "edge" not in k and "aligned" not in k:
+        meaning = "reconstruction fidelity"
+    elif "ssim" in k:
+        meaning = "structural similarity"
+    elif "lpips" in k:
+        meaning = "perceptual distance"
+    elif "edgepsnr" in k:
+        meaning = "edge fidelity"
+    elif "edgel1" in k:
+        meaning = "edge absolute error"
+    elif "gradientcorr" in k:
+        meaning = "gradient correlation"
+    elif "edgef1" in k:
+        meaning = "edge matching f1"
+    elif "bgleak" in k:
+        meaning = "background leakage"
+    elif "bgsensitivity" in k:
+        meaning = "background sensitivity (black/white render diff)"
+    elif "spikescore" in k:
+        meaning = "artifact spike score"
+    elif "flicker" in k:
+        meaning = "temporal flicker"
+    elif "texture" in k or "tenengrad" in k or "lapvar" in k:
+        meaning = "texture clarity"
+    elif "airartifact" in k:
+        meaning = "air-region artifact"
+    elif "aligned" in k:
+        meaning = "alignment-adjusted quality"
+    else:
+        meaning = "composite metric"
+    return f"{meaning}; {direction}"
 
 
 def main() -> None:
@@ -514,6 +952,8 @@ def main() -> None:
     rows_time: List[Dict[str, object]] = []
     rows_size: List[Dict[str, object]] = []
     rows_lite: List[Dict[str, object]] = []
+    rows_overview: List[Dict[str, object]] = []
+    rows_sgf_main: List[Dict[str, object]] = []
     rows_cmds: List[Dict[str, object]] = []
     rows_args: List[Dict[str, object]] = []
     rows_artifacts: List[Dict[str, object]] = []
@@ -586,9 +1026,100 @@ def main() -> None:
         rows_args.append({"Experiment": exp.name, **profile_args})
         rows_artifacts.append({"Experiment": exp.name, **profile_artifacts})
 
+    _attach_sgf_scores(rows_t, key_sources_t)
+    rows_sgf_main = sorted(
+        rows_t,
+        key=lambda r: _to_number(r.get("T_SCORE_SGF_Composite")) if _to_number(r.get("T_SCORE_SGF_Composite")) is not None else (
+            _to_number(r.get("T_SCORE_SGF_Main")) if _to_number(r.get("T_SCORE_SGF_Main")) is not None else -1.0
+        ),
+        reverse=True,
+    )
+
+    rgb_by_exp = {str(r.get("Experiment")): r for r in rows_rgb}
+    lite_by_exp = {str(r.get("Experiment")): r for r in rows_lite}
+    for r_t in rows_t:
+        exp_name = str(r_t.get("Experiment"))
+        r_rgb = rgb_by_exp.get(exp_name, {})
+        r_lite = lite_by_exp.get(exp_name, {})
+        row = {"Experiment": exp_name}
+        for k in OVERVIEW_COLUMNS:
+            if k in r_t:
+                row[k] = r_t.get(k)
+            elif k in r_rgb:
+                row[k] = r_rgb.get(k)
+            elif k in r_lite:
+                row[k] = r_lite.get(k)
+        rows_overview.append(row)
+
     wb = Workbook()
-    _write_sheet(wb, "Ablation_T", rows_t, key_sources_t, bold_best=True, max_width=60)
-    _write_sheet(wb, "Ablation_RGB", rows_rgb, key_sources_rgb, bold_best=True, max_width=60)
+    # Default view: keep key metrics visible, keep the full metrics in hidden columns.
+    keep_t = set(ABLATION_T_PREFERRED)
+    keep_rgb = set(ABLATION_RGB_PREFERRED)
+    hidden_t = _hide_non_core_columns(rows_t, keep_t)
+    hidden_rgb = _hide_non_core_columns(rows_rgb, keep_rgb)
+
+    # Still hide obvious low-value columns in full view fallback.
+    hidden_t.update(_suggest_hidden_columns(rows_t, keep_t))
+    hidden_rgb.update(_suggest_hidden_columns(rows_rgb, keep_rgb))
+    _write_sheet(
+        wb,
+        "Ablation_T",
+        rows_t,
+        key_sources_t,
+        bold_best=True,
+        preferred_cols=ABLATION_T_PREFERRED,
+        hidden_cols=hidden_t,
+        max_width=60,
+    )
+    _write_sheet(
+        wb,
+        "Ablation_RGB",
+        rows_rgb,
+        key_sources_rgb,
+        bold_best=True,
+        preferred_cols=ABLATION_RGB_PREFERRED,
+        hidden_cols=hidden_rgb,
+        max_width=60,
+    )
+    key_sources_overview: Dict[str, Set[str]] = {}
+    _merge_sources(key_sources_overview, key_sources_t)
+    _merge_sources(key_sources_overview, key_sources_rgb)
+    _write_sheet(
+        wb,
+        "Overview",
+        rows_overview,
+        key_sources_overview,
+        bold_best=True,
+        exact_cols=OVERVIEW_COLUMNS,
+        max_width=42,
+    )
+    _write_sheet(
+        wb,
+        "SGF_Main",
+        rows_sgf_main,
+        key_sources_t,
+        bold_best=True,
+        exact_cols=SGF_MAIN_COLUMNS,
+        max_width=42,
+    )
+    _write_sheet(
+        wb,
+        "Core_T",
+        rows_t,
+        key_sources_t,
+        bold_best=True,
+        exact_cols=CORE_T_COLUMNS,
+        max_width=42,
+    )
+    _write_sheet(
+        wb,
+        "Core_RGB",
+        rows_rgb,
+        key_sources_rgb,
+        bold_best=True,
+        exact_cols=CORE_RGB_COLUMNS,
+        max_width=42,
+    )
     _write_sheet(wb, "StageTime", rows_time, {}, bold_best=True, max_width=60)
     _write_sheet(wb, "SizeCount", rows_size, {}, bold_best=True, max_width=60)
     _write_sheet(wb, "LiteStats", rows_lite, {}, bold_best=False, max_width=60)
@@ -610,3 +1141,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

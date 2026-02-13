@@ -680,10 +680,25 @@ def main() -> None:
                     help="Background color for metrics_plus.py (default: 0)")
     ap.add_argument("--run_novel_view_metrics", action="store_true", default=True,
                     help="Run novel_view_metrics.py after thermal metrics (default: on)")
+    ap.add_argument("--novel_view_mode", type=str, default="grid72",
+                    choices=["orbit", "test_offset", "grid72"],
+                    help="Novel-view mode for novel_view_metrics.py (default: grid72)")
     ap.add_argument("--novel_view_N", type=int, default=60,
-                    help="Number of novel views for novel_view_metrics.py (default: 60)")
+                    help="Number of novel views for novel_view_metrics.py (used by orbit/test_offset; default: 60)")
     ap.add_argument("--novel_bg", type=int, default=0, choices=[0, 1],
                     help="Background color for novel_view_metrics.py (default: 0)")
+    ap.add_argument("--novel_grid_azimuth_count", type=int, default=8,
+                    help="grid72 azimuth count for novel_view_metrics.py (default: 8)")
+    ap.add_argument("--novel_grid_pitch_list", type=str, default="15,30,60",
+                    help="grid72 pitch list, comma-separated (default: 15,30,60)")
+    ap.add_argument("--novel_grid_distance_factors", type=str, default="0.5,1,1.5",
+                    help="grid72 distance factors, comma-separated (default: 0.5,1,1.5)")
+    ap.add_argument("--novel_grid_no_topdown", action="store_true", default=False,
+                    help="Disable top-down frame in novel_view_metrics.py grid72 mode (default: off)")
+    ap.add_argument("--novel_dump_ellipsoid_proxy", type=_str2bool, nargs="?", const=True, default=True,
+                    help="Dump same-camera ellipsoid proxy images in novel_view_metrics.py (default: on)")
+    ap.add_argument("--novel_ellipsoid_proxy_dir", type=str, default="",
+                    help="Optional output dir for ellipsoid proxy images (default: empty -> script default)")
     ap.add_argument("--debug_dump", action="store_true", default=False,
                     help="Write pipeline debug JSON (default: off)")
     ap.add_argument("--debug_dump_path", type=str, default=None,
@@ -1203,8 +1218,15 @@ def main() -> None:
                 "metrics_plus_K": getattr(args, "metrics_plus_K", None),
                 "metrics_plus_bg": getattr(args, "metrics_plus_bg", None),
                 "run_novel_view_metrics": bool(getattr(args, "run_novel_view_metrics", False)),
+                "novel_view_mode": getattr(args, "novel_view_mode", None),
                 "novel_view_N": getattr(args, "novel_view_N", None),
                 "novel_bg": getattr(args, "novel_bg", None),
+                "novel_grid_azimuth_count": getattr(args, "novel_grid_azimuth_count", None),
+                "novel_grid_pitch_list": getattr(args, "novel_grid_pitch_list", None),
+                "novel_grid_distance_factors": getattr(args, "novel_grid_distance_factors", None),
+                "novel_grid_no_topdown": bool(getattr(args, "novel_grid_no_topdown", False)),
+                "novel_dump_ellipsoid_proxy": bool(getattr(args, "novel_dump_ellipsoid_proxy", False)),
+                "novel_ellipsoid_proxy_dir": getattr(args, "novel_ellipsoid_proxy_dir", None),
                 "dry_run": bool(getattr(args, "dry_run", False)),
             },
             "paths": {
@@ -1878,7 +1900,20 @@ def main() -> None:
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_novel_view_metrics:
                 novel_cmd = [py, "novel_view_metrics.py", "-m", str(model_t),
+                             "--mode", str(args.novel_view_mode),
                              "--N", str(args.novel_view_N), "--bg", str(args.novel_bg)]
+                if str(args.novel_view_mode) == "grid72":
+                    novel_cmd.extend([
+                        "--grid_azimuth_count", str(args.novel_grid_azimuth_count),
+                        "--grid_pitch_list", str(args.novel_grid_pitch_list),
+                        "--grid_distance_factors", str(args.novel_grid_distance_factors),
+                    ])
+                    if args.novel_grid_no_topdown:
+                        novel_cmd.append("--grid_no_topdown")
+                if bool(getattr(args, "novel_dump_ellipsoid_proxy", False)):
+                    novel_cmd.append("--dump_ellipsoid_proxy")
+                    if str(getattr(args, "novel_ellipsoid_proxy_dir", "")).strip():
+                        novel_cmd.extend(["--ellipsoid_proxy_dir", str(args.novel_ellipsoid_proxy_dir)])
                 maybe_run(novel_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             _record_step("12_metrics_thermal", "run", metrics2_cmd, outputs_ok=metrics2_outputs_ok)
             write_marker(marker_path(state_dir, "12_metrics_thermal"), "12_metrics_thermal", metrics2_cmd, cwd=gs_root)

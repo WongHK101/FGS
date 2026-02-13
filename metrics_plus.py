@@ -97,6 +97,32 @@ def _texture_metrics_lcn(gray: np.ndarray) -> Tuple[float, float]:
     return tenengrad, edge_density
 
 
+def _edge_anisotropy(gray: np.ndarray) -> float:
+    # Directionality score in [0,1]: higher means clearer oriented structures.
+    g = _local_contrast_norm(gray)
+    gx, gy = _sobel_xy(g)
+    mag = np.hypot(gx, gy)
+    if mag.size <= 0:
+        return 0.0
+    thr = float(np.percentile(mag, 75.0))
+    mask = mag > max(thr, 1e-6)
+    if int(np.sum(mask)) < 16:
+        return 0.0
+    gxx = gx[mask] * gx[mask]
+    gyy = gy[mask] * gy[mask]
+    gxy = gx[mask] * gy[mask]
+    jxx = float(np.mean(gxx))
+    jyy = float(np.mean(gyy))
+    jxy = float(np.mean(gxy))
+    tr = max(jxx + jyy, 1e-12)
+    det = (jxx * jyy) - (jxy * jxy)
+    disc = max(0.0, 0.25 * tr * tr - det)
+    root = math.sqrt(disc)
+    l1 = 0.5 * tr + root
+    l2 = max(0.0, 0.5 * tr - root)
+    return float(np.clip((l1 - l2) / max(l1 + l2, 1e-12), 0.0, 1.0))
+
+
 def _laplacian(gray: np.ndarray) -> np.ndarray:
     k = np.array([[0, 1, 0],
                   [1, -4, 1],
@@ -166,6 +192,51 @@ def _aligned_psnr_gray(render: np.ndarray, gt: np.ndarray, k: int) -> float:
     return best
 
 
+def _crop_by_shift_2d(a: np.ndarray, b: np.ndarray, dx: int, dy: int) -> Tuple[np.ndarray, np.ndarray]:
+    h, w = a.shape
+    if dy >= 0:
+        ay0, by0, hh = dy, 0, h - dy
+    else:
+        ay0, by0, hh = 0, -dy, h + dy
+    if dx >= 0:
+        ax0, bx0, ww = dx, 0, w - dx
+    else:
+        ax0, bx0, ww = 0, -dx, w + dx
+    if hh <= 0 or ww <= 0:
+        return a[:0, :0], b[:0, :0]
+    return a[ay0:ay0 + hh, ax0:ax0 + ww], b[by0:by0 + hh, bx0:bx0 + ww]
+
+
+def _best_shift_gray_by_psnr(render_gray: np.ndarray, gt_gray: np.ndarray, k: int) -> Tuple[int, int]:
+    best = -float("inf")
+    best_dx = 0
+    best_dy = 0
+    h, w = render_gray.shape
+    for dy in range(-k, k + 1):
+        if dy >= 0:
+            ry0, gy0, hh = dy, 0, h - dy
+        else:
+            ry0, gy0, hh = 0, -dy, h + dy
+        if hh <= 0:
+            continue
+        for dx in range(-k, k + 1):
+            if dx >= 0:
+                rx0, gx0, ww = dx, 0, w - dx
+            else:
+                rx0, gx0, ww = 0, -dx, w + dx
+            if ww <= 0:
+                continue
+            r = render_gray[ry0:ry0 + hh, rx0:rx0 + ww]
+            g = gt_gray[gy0:gy0 + hh, gx0:gx0 + ww]
+            mse = float(np.mean((r - g) ** 2))
+            psnr = _psnr_from_mse(mse, 1.0)
+            if psnr > best:
+                best = psnr
+                best_dx = int(dx)
+                best_dy = int(dy)
+    return best_dx, best_dy
+
+
 def _bg_leak_ratio(render: np.ndarray, bg: int, thr: float = 3.0 / 255.0) -> float:
     if bg == 0:
         mask = np.max(render, axis=2) <= thr
@@ -174,14 +245,56 @@ def _bg_leak_ratio(render: np.ndarray, bg: int, thr: float = 3.0 / 255.0) -> flo
     return float(np.mean(mask))
 
 
+def _largest_top_connected(mask: np.ndarray) -> np.ndarray:
+    h, w = mask.shape
+    visited = np.zeros((h, w), dtype=bool)
+    best_area = 0
+    best_coords = []
+    for x0 in range(w):
+        if not mask[0, x0] or visited[0, x0]:
+            continue
+        stack = [(0, x0)]
+        visited[0, x0] = True
+        coords = []
+        area = 0
+        while stack:
+            y, x = stack.pop()
+            coords.append((y, x))
+            area += 1
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((ny, nx))
+        if area > best_area:
+            best_area = area
+            best_coords = coords
+    out = np.zeros((h, w), dtype=bool)
+    for y, x in best_coords:
+        out[y, x] = True
+    return out
+
+
 def _air_mask_from_gt(gray_g: np.ndarray, edge_g: np.ndarray) -> np.ndarray:
-    # Empty-air proxy from GT: low-intensity + low-edge regions.
-    q_gray = float(np.percentile(gray_g, 45.0))
-    q_edge = float(np.percentile(edge_g, 40.0))
-    mask = np.logical_and(gray_g <= q_gray, edge_g <= q_edge)
-    # Keep metric stable when scene is mostly close-up.
-    if float(np.mean(mask)) < 0.05:
-        mask = gray_g <= float(np.percentile(gray_g, 30.0))
+    # Robust air proxy:
+    # 1) constrain to upper region
+    # 2) low-edge candidates
+    # 3) keep top-border connected component
+    h, w = gray_g.shape
+    top_h = max(1, int(round(0.65 * h)))
+    top = np.zeros((h, w), dtype=bool)
+    top[:top_h, :] = True
+    edge_top = edge_g[top]
+    if edge_top.size <= 0:
+        return top
+    q_edge = float(np.percentile(edge_top, 60.0))
+    cand = np.logical_and(top, edge_g <= q_edge)
+    mask = _largest_top_connected(cand)
+    if float(np.mean(mask)) < 0.03:
+        q_edge2 = float(np.percentile(edge_top, 75.0))
+        cand2 = np.logical_and(top, edge_g <= q_edge2)
+        mask = _largest_top_connected(cand2)
+    if float(np.mean(mask)) < 0.01:
+        mask = np.logical_and(top, edge_g <= float(np.percentile(edge_top, 85.0)))
     return mask
 
 
@@ -224,10 +337,54 @@ def _edge_f1(edge_r: np.ndarray, edge_g: np.ndarray, thr: float) -> float:
     return 2.0 * precision * recall / denom_f1
 
 
+def _edge_f1_best(edge_r: np.ndarray, edge_g: np.ndarray, fallback_thr: float) -> float:
+    vals = np.concatenate([edge_r.reshape(-1), edge_g.reshape(-1)], axis=0)
+    if vals.size == 0:
+        return 0.0
+    q = np.linspace(0.65, 0.98, 12)
+    thrs = np.quantile(vals, q)
+    thrs = np.unique(np.clip(thrs, 1e-4, 1.0))
+    if thrs.size == 0:
+        thrs = np.array([max(1e-4, float(fallback_thr))], dtype=np.float32)
+    best = 0.0
+    for t in thrs:
+        f1 = _edge_f1(edge_r, edge_g, float(t))
+        if f1 > best:
+            best = f1
+    return float(best)
+
+
 def _format_float(v: float) -> str:
     if math.isfinite(v):
         return f"{v:.6f}"
     return str(v)
+
+
+def _ratio_closeness(r: float) -> float:
+    if (not math.isfinite(r)) or r <= 0.0:
+        return 0.0
+    # 1.0 is best, decays symmetrically for over/under-shoot.
+    return float(math.exp(-abs(math.log(r))))
+
+
+def _score_high_unit(x: float) -> float:
+    if not math.isfinite(x):
+        return 0.0
+    return float(np.clip(x, 0.0, 1.0))
+
+
+def _score_high_pos(x: float, scale: float) -> float:
+    if (not math.isfinite(x)) or x <= 0.0:
+        return 0.0
+    s = max(1e-6, float(scale))
+    return float(1.0 - math.exp(-x / s))
+
+
+def _score_low_pos(x: float, scale: float) -> float:
+    if not math.isfinite(x):
+        return 0.0
+    s = max(1e-6, float(scale))
+    return float(math.exp(-max(0.0, x) / s))
 
 
 def _iter_pairs(renders_dir: Path, gt_dir: Path) -> Iterable[Tuple[str, np.ndarray, np.ndarray]]:
@@ -263,17 +420,23 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             edge_l1s: List[float] = []
             grad_corrs: List[float] = []
             edge_f1s: List[float] = []
+            edge_f1_bests: List[float] = []
             lap_var_r: List[float] = []
             lap_var_g: List[float] = []
             hf_r: List[float] = []
             hf_g: List[float] = []
             aligned_psnrs: List[float] = []
             aligned_edge_psnrs: List[float] = []
+            aligned_grad_corrs: List[float] = []
+            aligned_edge_f1s: List[float] = []
             bg_leaks: List[float] = []
             tex_lcn_ten_r: List[float] = []
             tex_lcn_ten_g: List[float] = []
             tex_lcn_edge_r: List[float] = []
             tex_lcn_edge_g: List[float] = []
+            edge_aniso_r: List[float] = []
+            edge_aniso_g: List[float] = []
+            air_mask_ratios: List[float] = []
             air_edge_excess: List[float] = []
             air_hf_mean: List[float] = []
             air_bright_excess: List[float] = []
@@ -291,6 +454,7 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 edge_l1s.append(float(np.mean(np.abs(edge_r - edge_g))))
                 grad_corrs.append(_corrcoef_safe(edge_r, edge_g))
                 edge_f1s.append(_edge_f1(edge_r, edge_g, edge_thr))
+                edge_f1_bests.append(_edge_f1_best(edge_r, edge_g, edge_thr))
 
                 lap_r = _laplacian(gray_r)
                 lap_g = _laplacian(gray_g)
@@ -301,6 +465,10 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
 
                 aligned_psnrs.append(_aligned_psnr_rgb(render, gt, k))
                 aligned_edge_psnrs.append(_aligned_psnr_gray(edge_r, edge_g, k))
+                best_dx, best_dy = _best_shift_gray_by_psnr(gray_r, gray_g, k)
+                edge_r_al, edge_g_al = _crop_by_shift_2d(edge_r, edge_g, best_dx, best_dy)
+                aligned_grad_corrs.append(_corrcoef_safe(edge_r_al, edge_g_al))
+                aligned_edge_f1s.append(_edge_f1(edge_r_al, edge_g_al, edge_thr))
                 bg_leaks.append(_bg_leak_ratio(render, bg))
 
                 # Brightness-insensitive texture clarity.
@@ -310,9 +478,12 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 tex_lcn_ten_g.append(ten_g)
                 tex_lcn_edge_r.append(ed_r)
                 tex_lcn_edge_g.append(ed_g)
+                edge_aniso_r.append(_edge_anisotropy(gray_r))
+                edge_aniso_g.append(_edge_anisotropy(gray_g))
 
                 # Air cleanliness: artifact/fog proxies measured on GT-derived empty-air mask.
                 air_mask = _air_mask_from_gt(gray_g, edge_g)
+                air_mask_ratios.append(float(np.mean(air_mask)))
                 air_edge_excess.append(_masked_mean(np.maximum(edge_r - edge_g, 0.0), air_mask))
                 air_hf_mean.append(_masked_mean(np.abs(lap_r), air_mask))
                 air_bright_excess.append(_masked_mean(np.maximum(gray_r - gray_g, 0.0), air_mask))
@@ -324,6 +495,7 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_edge_l1 = float(np.mean(edge_l1s))
             mean_grad_corr = float(np.mean(grad_corrs))
             mean_edge_f1 = float(np.mean(edge_f1s))
+            mean_edge_f1_best = float(np.mean(edge_f1_bests))
             mean_lap_r = float(np.mean(lap_var_r))
             mean_lap_g = float(np.mean(lap_var_g))
             lap_ratio = mean_lap_r / mean_lap_g if mean_lap_g > 0.0 else float("inf")
@@ -332,6 +504,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_hf_diff = float(abs(mean_hf_r - mean_hf_g))
             mean_aligned_psnr = float(np.mean(aligned_psnrs))
             mean_aligned_edge_psnr = float(np.mean(aligned_edge_psnrs))
+            mean_aligned_grad_corr = float(np.mean(aligned_grad_corrs))
+            mean_aligned_edge_f1 = float(np.mean(aligned_edge_f1s))
             mean_bg_leak = float(np.mean(bg_leaks))
             mean_tex_ten_r = float(np.mean(tex_lcn_ten_r))
             mean_tex_ten_g = float(np.mean(tex_lcn_ten_g))
@@ -339,15 +513,78 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_tex_ed_r = float(np.mean(tex_lcn_edge_r))
             mean_tex_ed_g = float(np.mean(tex_lcn_edge_g))
             tex_ed_ratio = mean_tex_ed_r / mean_tex_ed_g if mean_tex_ed_g > 0.0 else float("inf")
+            mean_aniso_r = float(np.mean(edge_aniso_r))
+            mean_aniso_g = float(np.mean(edge_aniso_g))
+            aniso_ratio = mean_aniso_r / mean_aniso_g if mean_aniso_g > 0.0 else float("inf")
+            mean_air_mask_ratio = float(np.mean(air_mask_ratios))
             mean_air_edge_excess = float(np.mean(air_edge_excess))
             mean_air_hf = float(np.mean(air_hf_mean))
             mean_air_bright_excess = float(np.mean(air_bright_excess))
+
+            # SGF-oriented derived scores (higher is better):
+            s_grad = _score_high_unit(0.5 * (mean_aligned_grad_corr + 1.0))
+            s_edge_f1 = _score_high_unit(mean_aligned_edge_f1)
+            s_edge_f1_best = _score_high_unit(mean_edge_f1_best)
+            s_tex_ratio = _ratio_closeness(tex_ten_ratio)
+            s_tex_ed_ratio = _ratio_closeness(tex_ed_ratio)
+            s_aniso_ratio = _ratio_closeness(aniso_ratio)
+            sgf_structure_score = float(
+                np.clip(
+                    0.24 * s_grad +
+                    0.20 * s_edge_f1 +
+                    0.10 * s_edge_f1_best +
+                    0.24 * s_tex_ratio +
+                    0.12 * s_tex_ed_ratio +
+                    0.10 * s_aniso_ratio,
+                    0.0, 1.0
+                )
+            )
+
+            c_air_edge = _score_low_pos(mean_air_edge_excess, 0.010)
+            c_air_hf = _score_low_pos(mean_air_hf, 0.020)
+            c_air_bright = _score_low_pos(mean_air_bright_excess, 0.020)
+            c_bg = _score_low_pos(mean_bg_leak, 0.005)
+            c_hf_diff = _score_low_pos(mean_hf_diff, 0.030)
+            c_lap_ratio = _ratio_closeness(lap_ratio)
+            sgf_clean_score = float(
+                np.clip(
+                    0.22 * c_air_edge +
+                    0.22 * c_air_hf +
+                    0.20 * c_air_bright +
+                    0.16 * c_bg +
+                    0.10 * c_hf_diff +
+                    0.10 * c_lap_ratio,
+                    0.0, 1.0
+                )
+            )
+
+            f_edge_psnr = _score_high_pos(mean_edge_psnr, 25.0)
+            f_aligned_edge = _score_high_pos(mean_aligned_edge_psnr, 25.0)
+            f_aligned_rgb = _score_high_pos(mean_aligned_psnr, 25.0)
+            sgf_fidelity_score = float(
+                np.clip(
+                    0.40 * f_edge_psnr +
+                    0.35 * f_aligned_edge +
+                    0.25 * f_aligned_rgb,
+                    0.0, 1.0
+                )
+            )
+
+            sgf_metrics_plus_score = float(
+                np.clip(
+                    0.50 * sgf_structure_score +
+                    0.35 * sgf_clean_score +
+                    0.15 * sgf_fidelity_score,
+                    0.0, 1.0
+                )
+            )
 
             print("Method:", method)
             print(f"  EdgePSNR(mean): {_format_float(mean_edge_psnr)}")
             print(f"  EdgeL1(mean): {_format_float(mean_edge_l1)}")
             print(f"  GradientCorr(mean): {_format_float(mean_grad_corr)}")
             print(f"  EdgeF1@{edge_thr:.3f}(mean): {_format_float(mean_edge_f1)}")
+            print(f"  EdgeF1_best(mean): {_format_float(mean_edge_f1_best)}")
             print(f"  LapVar(render)(mean): {_format_float(mean_lap_r)}")
             print(f"  LapVar(gt)(mean): {_format_float(mean_lap_g)}")
             print(f"  LapVarRatio(mean): {_format_float(lap_ratio)}")
@@ -356,6 +593,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  HFAbsMeanDiff(mean): {_format_float(mean_hf_diff)}")
             print(f"  AlignedPSNR@{k}(mean): {_format_float(mean_aligned_psnr)}")
             print(f"  AlignedEdgePSNR@{k}(mean): {_format_float(mean_aligned_edge_psnr)}")
+            print(f"  AlignedGradientCorr@{k}(mean): {_format_float(mean_aligned_grad_corr)}")
+            print(f"  AlignedEdgeF1@{k}(mean): {_format_float(mean_aligned_edge_f1)}")
             print(f"  BgLeakRatio(mean): {_format_float(mean_bg_leak)}")
             print(f"  TextureLCN_Tenengrad(render)(mean): {_format_float(mean_tex_ten_r)}")
             print(f"  TextureLCN_Tenengrad(gt)(mean): {_format_float(mean_tex_ten_g)}")
@@ -363,15 +602,24 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  TextureLCN_EdgeDensity(render)(mean): {_format_float(mean_tex_ed_r)}")
             print(f"  TextureLCN_EdgeDensity(gt)(mean): {_format_float(mean_tex_ed_g)}")
             print(f"  TextureLCN_EdgeDensityRatio(mean): {_format_float(tex_ed_ratio)}")
+            print(f"  EdgeAnisotropy(render)(mean): {_format_float(mean_aniso_r)}")
+            print(f"  EdgeAnisotropy(gt)(mean): {_format_float(mean_aniso_g)}")
+            print(f"  EdgeAnisotropyRatio(mean): {_format_float(aniso_ratio)}")
             print(f"  AirArtifactEdgeExcess(mean): {_format_float(mean_air_edge_excess)}")
             print(f"  AirArtifactHFMean(mean): {_format_float(mean_air_hf)}")
             print(f"  AirArtifactBrightExcess(mean): {_format_float(mean_air_bright_excess)}")
+            print(f"  AirMaskRatio(mean): {_format_float(mean_air_mask_ratio)}")
+            print(f"  SGF_StructureScore(mean): {_format_float(sgf_structure_score)}")
+            print(f"  SGF_CleanScore(mean): {_format_float(sgf_clean_score)}")
+            print(f"  SGF_FidelityScore(mean): {_format_float(sgf_fidelity_score)}")
+            print(f"  SGF_MetricsPlusScore(mean): {_format_float(sgf_metrics_plus_score)}")
 
             full_dict[scene_dir][method] = {
                 "EdgePSNR": mean_edge_psnr,
                 "EdgeL1": mean_edge_l1,
                 "GradientCorr": mean_grad_corr,
                 "EdgeF1": mean_edge_f1,
+                "EdgeF1_best": mean_edge_f1_best,
                 "LapVar_render": mean_lap_r,
                 "LapVar_gt": mean_lap_g,
                 "LapVarRatio": lap_ratio,
@@ -380,6 +628,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "HFAbsMeanDiff": mean_hf_diff,
                 "AlignedPSNR": mean_aligned_psnr,
                 "AlignedEdgePSNR": mean_aligned_edge_psnr,
+                "AlignedGradientCorr": mean_aligned_grad_corr,
+                "AlignedEdgeF1": mean_aligned_edge_f1,
                 "BgLeakRatio": mean_bg_leak,
                 "TextureLCN_Tenengrad_render": mean_tex_ten_r,
                 "TextureLCN_Tenengrad_gt": mean_tex_ten_g,
@@ -387,9 +637,17 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "TextureLCN_EdgeDensity_render": mean_tex_ed_r,
                 "TextureLCN_EdgeDensity_gt": mean_tex_ed_g,
                 "TextureLCN_EdgeDensityRatio": tex_ed_ratio,
+                "EdgeAnisotropy_render": mean_aniso_r,
+                "EdgeAnisotropy_gt": mean_aniso_g,
+                "EdgeAnisotropyRatio": aniso_ratio,
                 "AirArtifactEdgeExcess": mean_air_edge_excess,
                 "AirArtifactHFMean": mean_air_hf,
                 "AirArtifactBrightExcess": mean_air_bright_excess,
+                "AirMaskRatio": mean_air_mask_ratio,
+                "SGF_StructureScore": sgf_structure_score,
+                "SGF_CleanScore": sgf_clean_score,
+                "SGF_FidelityScore": sgf_fidelity_score,
+                "SGF_MetricsPlusScore": sgf_metrics_plus_score,
             }
 
         if save_json:

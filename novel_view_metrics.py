@@ -8,7 +8,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 import numpy as np
 from PIL import Image
@@ -98,6 +98,32 @@ def _texture_metrics(gray: np.ndarray) -> Tuple[float, float, float]:
     thr = max(thr, 1e-4)
     edge_density = float(np.mean(gm > thr))
     return tenengrad, grad_p90, edge_density
+
+
+def _edge_anisotropy(gray: np.ndarray) -> float:
+    # Directionality score in [0,1]: higher means clearer oriented structures, lower means isotropic clutter/smear.
+    g = _local_contrast_norm(gray)
+    gx, gy = _sobel_xy(g)
+    mag = np.hypot(gx, gy)
+    if mag.size <= 0:
+        return 0.0
+    thr = float(np.percentile(mag, 75.0))
+    mask = mag > max(thr, 1e-6)
+    if int(np.sum(mask)) < 16:
+        return 0.0
+    gxx = gx[mask] * gx[mask]
+    gyy = gy[mask] * gy[mask]
+    gxy = gx[mask] * gy[mask]
+    jxx = float(np.mean(gxx))
+    jyy = float(np.mean(gyy))
+    jxy = float(np.mean(gxy))
+    tr = max(jxx + jyy, 1e-12)
+    det = (jxx * jyy) - (jxy * jxy)
+    disc = max(0.0, 0.25 * tr * tr - det)
+    root = math.sqrt(disc)
+    l1 = 0.5 * tr + root
+    l2 = max(0.0, 0.5 * tr - root)
+    return float(np.clip((l1 - l2) / max(l1 + l2, 1e-12), 0.0, 1.0))
 
 
 def _laplacian(gray: np.ndarray) -> np.ndarray:
@@ -382,9 +408,20 @@ def _connected_components(mask: np.ndarray) -> List[Tuple[int, int, int]]:
     return comps
 
 
-def _spike_score(edge_mag: np.ndarray, thr: float = 0.1) -> float:
+def _spike_score(edge_mag: np.ndarray, thr: float = 0.1, valid_mask: Optional[np.ndarray] = None) -> float:
     mask = edge_mag > thr
+    if valid_mask is not None:
+        if valid_mask.shape != mask.shape:
+            return 0.0
+        mask = np.logical_and(mask, valid_mask.astype(bool))
     ds = mask[::4, ::4]
+    if valid_mask is not None:
+        vm = valid_mask[::4, ::4].astype(bool)
+        denom = int(vm.sum())
+    else:
+        denom = int(ds.size)
+    if denom <= 0:
+        return 0.0
     comps = _connected_components(ds)
     spike_pixels = 0
     for area, w, h in comps:
@@ -393,7 +430,7 @@ def _spike_score(edge_mag: np.ndarray, thr: float = 0.1) -> float:
         ar = max(w, h) / max(1, min(w, h))
         if ar >= 4.0 and area <= 200:
             spike_pixels += area
-    return float(spike_pixels) / float(ds.size)
+    return float(spike_pixels) / float(denom)
 
 
 def _collect_frame_tags(out_dir: Path, num_frames: int) -> List[Tuple[int, bool]]:
@@ -432,7 +469,171 @@ def _write_bucket_means(results: Dict[str, Any], key_prefix: str, values: List[f
         results[f"{key_prefix}_topdown_count"] = int(len(top_vals))
 
 
-def _render_mode_orbit(scene: Scene, gaussians: GaussianModel, pipe, bg: int, n: int, out_dir: Path) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+def _bucket_pairs(results: Dict[str, Any], key_prefix: str) -> List[Tuple[int, float]]:
+    pairs: List[Tuple[int, float]] = []
+    pat = re.compile(rf"^{re.escape(key_prefix)}_d(\d+)_mean$")
+    for k, v in results.items():
+        m = pat.match(str(k))
+        if not m:
+            continue
+        try:
+            idx = int(m.group(1))
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(fv):
+            pairs.append((idx, fv))
+    pairs.sort(key=lambda x: x[0])
+    return pairs
+
+
+def _head_mean(pairs: List[Tuple[int, float]], n: int, fallback: float) -> float:
+    if not pairs:
+        return float(fallback)
+    vals = [v for _, v in pairs[: max(1, int(n))]]
+    return float(np.mean(vals)) if vals else float(fallback)
+
+
+def _tail_mean(pairs: List[Tuple[int, float]], n: int, fallback: float) -> float:
+    if not pairs:
+        return float(fallback)
+    vals = [v for _, v in pairs[-max(1, int(n)) :]]
+    return float(np.mean(vals)) if vals else float(fallback)
+
+
+def _prepare_png_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for old in path.glob("*.png"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _qnorm_torch(x: torch.Tensor, qlo: float = 0.02, qhi: float = 0.98, eps: float = 1e-8) -> torch.Tensor:
+    if x.numel() == 0:
+        return x
+    lo = torch.quantile(x, qlo)
+    hi = torch.quantile(x, qhi)
+    if (not torch.isfinite(lo)) or (not torch.isfinite(hi)):
+        return torch.zeros_like(x)
+    denom = hi - lo
+    if torch.abs(denom) < eps:
+        return torch.zeros_like(x)
+    return torch.clamp((x - lo) / denom, 0.0, 1.0)
+
+
+def _build_ellipsoid_proxy_override_color(gaussians: GaussianModel) -> Optional[torch.Tensor]:
+    with torch.no_grad():
+        dc = gaussians.get_features_dc
+        if dc is None or dc.numel() == 0:
+            return None
+        # Use SH-DC color to keep appearance close to the model's native colors.
+        # _features_dc is (N,1,3) in this repo.
+        if dc.dim() == 3 and dc.shape[1] == 1:
+            dc = dc[:, 0, :]
+        dc = dc.float()
+        rgb = torch.clamp(dc + 0.5, 0.0, 1.0)
+        return rgb
+
+
+def _render_save_pair(
+    cam: MiniCam,
+    gaussians: GaussianModel,
+    pipe,
+    bg_color: torch.Tensor,
+    out_dir: Path,
+    file_name: str,
+    frames: List[np.ndarray],
+    proxy_enabled: bool,
+    proxy_dir: Optional[Path],
+    proxy_override_color: Optional[torch.Tensor],
+    bg_mode: int,
+    bg_sens_means: Optional[List[float]] = None,
+    bg_sens_ratios: Optional[List[float]] = None,
+    bg_sens_thr: float = 8.0 / 255.0,
+) -> None:
+    render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
+    img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+    frames.append(img)
+    img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+    Image.fromarray(img_u8).save(out_dir / file_name)
+
+    if bg_sens_means is not None and bg_sens_ratios is not None:
+        if int(bg_mode) == 0:
+            img_b = img
+            bg_white = torch.tensor([1, 1, 1], dtype=torch.float32, device=bg_color.device)
+            rw = render(cam, gaussians, pipe, bg_white, use_trained_exp=False)
+            img_w = rw["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        else:
+            img_w = img
+            bg_black = torch.tensor([0, 0, 0], dtype=torch.float32, device=bg_color.device)
+            rb = render(cam, gaussians, pipe, bg_black, use_trained_exp=False)
+            img_b = rb["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        sens = np.mean(np.abs(img_b - img_w), axis=2)
+        bg_sens_means.append(float(np.mean(sens)))
+        bg_sens_ratios.append(float(np.mean(sens > float(bg_sens_thr))))
+
+    if proxy_enabled and proxy_dir is not None and proxy_override_color is not None:
+        # For ellipsoid diagnostics we force near-opaque alpha so distribution is easier to inspect.
+        # Keep it local to proxy pass and restore immediately after render.
+        op_backup = None
+        aa_backup = None
+        try:
+            if hasattr(gaussians, "_opacity") and gaussians._opacity is not None:
+                op_backup = gaussians._opacity.detach().clone()
+                with torch.no_grad():
+                    gaussians._opacity.data.fill_(12.0)  # sigmoid(12) ~= 0.999994
+            if hasattr(pipe, "antialiasing"):
+                aa_backup = bool(pipe.antialiasing)
+                pipe.antialiasing = False
+            render_proxy = render(
+                cam,
+                gaussians,
+                pipe,
+                bg_color,
+                scaling_modifier=0.65,
+                override_color=proxy_override_color,
+                use_trained_exp=False,
+            )
+        finally:
+            if aa_backup is not None:
+                pipe.antialiasing = aa_backup
+            if op_backup is not None:
+                with torch.no_grad():
+                    gaussians._opacity.data.copy_(op_backup)
+        img_proxy = render_proxy["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        # Harder depth-edge outline for clearer ellipsoid boundaries.
+        depth_t = render_proxy.get("depth", None)
+        if depth_t is not None:
+            try:
+                depth = depth_t.detach().float().squeeze().cpu().numpy()
+                if depth.ndim == 2 and depth.size > 0:
+                    gx, gy = np.gradient(depth)
+                    g = np.hypot(gx, gy)
+                    p80 = float(np.percentile(g, 80.0))
+                    p98 = float(np.percentile(g, 98.0))
+                    if p98 > p80:
+                        e = np.clip((g - p80) / (p98 - p80), 0.0, 1.0)
+                        img_proxy = np.clip(img_proxy * (1.0 - 0.65 * e[..., None]), 0.0, 1.0)
+            except Exception:
+                pass
+        img_proxy_u8 = (img_proxy * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+        stem = Path(file_name).stem
+        Image.fromarray(img_proxy_u8).save(proxy_dir / f"{stem}_ellip.png")
+
+
+def _render_mode_orbit(
+    scene: Scene,
+    gaussians: GaussianModel,
+    pipe,
+    bg: int,
+    n: int,
+    out_dir: Path,
+    proxy_enabled: bool = False,
+    proxy_dir: Optional[Path] = None,
+    proxy_override_color: Optional[torch.Tensor] = None,
+) -> Tuple[List[np.ndarray], Dict[str, Any]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive a novel path.")
@@ -457,13 +658,14 @@ def _render_mode_orbit(scene: Scene, gaussians: GaussianModel, pipe, bg: int, n:
     proj = getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy).transpose(0, 1).cuda()
     bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for old in out_dir.glob("*.png"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
+    _prepare_png_dir(out_dir)
+    if proxy_enabled and proxy_dir is not None:
+        _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    bg_sens_means: List[float] = []
+    bg_sens_ratios: List[float] = []
+    bg_sens_means: List[float] = []
+    bg_sens_ratios: List[float] = []
 
     for i in range(n):
         theta = 2.0 * math.pi * (i / float(n))
@@ -477,18 +679,36 @@ def _render_mode_orbit(scene: Scene, gaussians: GaussianModel, pipe, bg: int, n:
         full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
         cam = MiniCam(width, height, fovy, fovx, znear, zfar, world_view, full_proj)
 
-        render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
-        img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
-        frames.append(img)
+        _render_save_pair(
+            cam, gaussians, pipe, bg_color, out_dir, f"{i:04d}.png", frames,
+            proxy_enabled, proxy_dir, proxy_override_color, int(bg),
+            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+        )
 
-        img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
-        Image.fromarray(img_u8).save(out_dir / f"{i:04d}.png")
+    return frames, {
+        "mode": "orbit",
+        "num_frames_target": int(n),
+        "bg_sensitivity_thr": float(8.0 / 255.0),
+        "bg_sensitivity_means": bg_sens_means,
+        "bg_sensitivity_ratios": bg_sens_ratios,
+    }
 
-    return frames, {"mode": "orbit", "num_frames_target": int(n)}
 
-
-def _render_mode_test_offset(scene: Scene, gaussians: GaussianModel, pipe, bg: int, n: int, out_dir: Path,
-                             shift_lat: float, shift_up: float, lookat_blend: float, seed: int) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+def _render_mode_test_offset(
+    scene: Scene,
+    gaussians: GaussianModel,
+    pipe,
+    bg: int,
+    n: int,
+    out_dir: Path,
+    shift_lat: float,
+    shift_up: float,
+    lookat_blend: float,
+    seed: int,
+    proxy_enabled: bool = False,
+    proxy_dir: Optional[Path] = None,
+    proxy_override_color: Optional[torch.Tensor] = None,
+) -> Tuple[List[np.ndarray], Dict[str, Any]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive test-offset path.")
@@ -505,7 +725,9 @@ def _render_mode_test_offset(scene: Scene, gaussians: GaussianModel, pipe, bg: i
 
     rng = np.random.default_rng(int(seed))
     bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_png_dir(out_dir)
+    if proxy_enabled and proxy_dir is not None:
+        _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
 
     for i, src_cam in enumerate(cams):
@@ -545,11 +767,11 @@ def _render_mode_test_offset(scene: Scene, gaussians: GaussianModel, pipe, bg: i
         full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
         cam = MiniCam(width, height, fovy, fovx, znear, zfar, world_view, full_proj)
 
-        render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
-        img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
-        frames.append(img)
-        img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
-        Image.fromarray(img_u8).save(out_dir / f"{i:04d}.png")
+        _render_save_pair(
+            cam, gaussians, pipe, bg_color, out_dir, f"{i:04d}.png", frames,
+            proxy_enabled, proxy_dir, proxy_override_color, int(bg),
+            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+        )
 
     meta = {
         "mode": "test_offset",
@@ -560,6 +782,9 @@ def _render_mode_test_offset(scene: Scene, gaussians: GaussianModel, pipe, bg: i
         "shift_up": float(shift_up),
         "lookat_blend": float(lookat_blend),
         "seed": int(seed),
+        "bg_sensitivity_thr": float(8.0 / 255.0),
+        "bg_sensitivity_means": bg_sens_means,
+        "bg_sensitivity_ratios": bg_sens_ratios,
     }
     return frames, meta
 
@@ -568,7 +793,9 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
                         near_scale: float, far_scale: float, far_blend: float,
                         far_cover_pad: float, far_cam_mult: float,
                         azimuth_count: int, pitch_list: List[float], dist_factors: List[float], include_topdown: bool,
-                        jitter: bool, pos_jitter: float, ang_jitter_deg: float, seed: int) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+                        jitter: bool, pos_jitter: float, ang_jitter_deg: float, seed: int,
+                        proxy_enabled: bool = False, proxy_dir: Optional[Path] = None,
+                        proxy_override_color: Optional[torch.Tensor] = None) -> Tuple[List[np.ndarray], Dict[str, Any]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive grid72 path.")
@@ -593,8 +820,6 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
     factors = sorted({float(max(0.0, f)) for f in dist_factors})
     if not factors:
         factors = [0.0, 0.5, 1.0]
-    if factors[0] > 0.0:
-        factors = [0.0] + factors
     far_blend = float(np.clip(far_blend, 0.1, 1.0))
     far_cover_pad = max(1.0, float(far_cover_pad))
     far_cam_mult = max(1.0, float(far_cam_mult))
@@ -650,13 +875,12 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
     bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
 
     rng = np.random.default_rng(int(seed))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for old in out_dir.glob("*.png"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
+    _prepare_png_dir(out_dir)
+    if proxy_enabled and proxy_dir is not None:
+        _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    bg_sens_means: List[float] = []
+    bg_sens_ratios: List[float] = []
     idx = 0
     roll_flip_count = 0
     for azi_i, azi in enumerate(azimuths):
@@ -689,19 +913,18 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
                 full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
                 cam = MiniCam(width, height, fovy, fovx, znear, zfar_novel, world_view, full_proj)
 
-                render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
-                img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
-                frames.append(img)
-                img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
                 azi_tag = int(round((a % 360.0)))
                 pit_tag = int(round(p))
                 # Naming encodes deterministic inspection order:
                 # direction index -> pitch index -> distance index.
-                Image.fromarray(img_u8).save(
-                    out_dir / (
-                        f"{idx:04d}_dir{azi_i:02d}_pit{pit_i:02d}_dst{dist_i:02d}"
-                        f"_a{azi_tag:03d}_p{pit_tag:02d}_de{d:.2f}.png"
-                    )
+                file_name = (
+                    f"{idx:04d}_dir{azi_i:02d}_pit{pit_i:02d}_dst{dist_i:02d}"
+                    f"_a{azi_tag:03d}_p{pit_tag:02d}_de{d:.2f}.png"
+                )
+                _render_save_pair(
+                    cam, gaussians, pipe, bg_color, out_dir, file_name, frames,
+                    proxy_enabled, proxy_dir, proxy_override_color, int(bg),
+                    bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
                 )
                 idx += 1
 
@@ -725,12 +948,11 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
             full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
             cam = MiniCam(width, height, fovy, fovx, znear, zfar_novel, world_view, full_proj)
 
-            render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
-            img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
-            frames.append(img)
-            img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
-            Image.fromarray(img_u8).save(
-                out_dir / f"{idx:04d}_topdown_a{int(round(top_az))%360:03d}_dst{dist_i:02d}_de{top_dist:.2f}.png"
+            file_name = f"{idx:04d}_topdown_a{int(round(top_az))%360:03d}_dst{dist_i:02d}_de{top_dist:.2f}.png"
+            _render_save_pair(
+                cam, gaussians, pipe, bg_color, out_dir, file_name, frames,
+                proxy_enabled, proxy_dir, proxy_override_color, int(bg),
+                bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
             )
             idx += 1
 
@@ -769,6 +991,9 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
         "pos_jitter": float(pos_jitter),
         "ang_jitter_deg": float(ang_jitter_deg),
         "seed": int(seed),
+        "bg_sensitivity_thr": float(8.0 / 255.0),
+        "bg_sensitivity_means": bg_sens_means,
+        "bg_sensitivity_ratios": bg_sens_ratios,
     }
     return frames, meta
 
@@ -802,6 +1027,10 @@ def main() -> None:
     parser.add_argument("--grid_jitter", action="store_true", default=False, help="Enable small random jitter in grid72")
     parser.add_argument("--grid_pos_jitter", type=float, default=0.05, help="grid72 distance jitter ratio")
     parser.add_argument("--grid_ang_jitter_deg", type=float, default=2.0, help="grid72 angle jitter in degrees")
+    parser.add_argument("--dump_ellipsoid_proxy", action="store_true", default=False,
+                        help="Dump per-view ellipsoid proxy images with exact same camera poses (default: off)")
+    parser.add_argument("--ellipsoid_proxy_dir", type=str, default="",
+                        help="Output directory for ellipsoid proxy images (default: <out_dir>_ellip)")
     args = get_combined_args(parser)
 
     safe_state(False)
@@ -821,10 +1050,19 @@ def main() -> None:
 
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, load_iteration=args.iteration, shuffle=False)
+    proxy_enabled = bool(args.dump_ellipsoid_proxy)
+    if args.ellipsoid_proxy_dir:
+        proxy_out_dir = Path(args.ellipsoid_proxy_dir)
+    else:
+        proxy_out_dir = out_dir.parent / f"{out_dir.name}_ellip"
+    proxy_override_color = _build_ellipsoid_proxy_override_color(gaussians) if proxy_enabled else None
 
     with torch.no_grad():
         if args.mode == "orbit":
-            frames, mode_meta = _render_mode_orbit(scene, gaussians, pipeline, args.bg, args.N, out_dir)
+            frames, mode_meta = _render_mode_orbit(
+                scene, gaussians, pipeline, args.bg, args.N, out_dir,
+                proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color
+            )
         elif args.mode == "test_offset":
             frames, mode_meta = _render_mode_test_offset(
                 scene, gaussians, pipeline, args.bg, args.N, out_dir,
@@ -832,6 +1070,7 @@ def main() -> None:
                 shift_up=float(args.test_shift_up),
                 lookat_blend=float(np.clip(args.test_lookat_blend, 0.0, 1.0)),
                 seed=int(args.seed),
+                proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color,
             )
         else:
             grid_pitches = _parse_float_list(args.grid_pitch_list, [30.0, 60.0], clip_min=5.0, clip_max=89.9)
@@ -851,14 +1090,18 @@ def main() -> None:
                 pos_jitter=float(max(0.0, args.grid_pos_jitter)),
                 ang_jitter_deg=float(max(0.0, args.grid_ang_jitter_deg)),
                 seed=int(args.seed),
+                proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color,
             )
 
     frame_tags = _collect_frame_tags(out_dir, len(frames))
     bg_leaks: List[float] = []
-    spike_scores: List[float] = []
+    spike_scores_all: List[float] = []
+    spike_scores_air: List[float] = []
+    spike_scores_air_thr: List[float] = []
     tex_tenengrad: List[float] = []
     tex_grad_p90: List[float] = []
     tex_edge_density: List[float] = []
+    edge_anisotropy: List[float] = []
     air_mask_ratios: List[float] = []
     air_edge_means: List[float] = []
     air_hf_means: List[float] = []
@@ -872,12 +1115,21 @@ def main() -> None:
         grays.append(gray)
         edge_mag = _sobel_mag(gray)
         ten, gp90, edens = _texture_metrics(gray)
+        ean = _edge_anisotropy(gray)
         air_ratio, air_edge, air_hf, air_blob, air_fog, air_score = _air_cleanliness_metrics(gray, edge_mag)
+        air_mask = _air_mask_from_render(gray, edge_mag)
         bg_leaks.append(_bg_leak_ratio(img, args.bg))
-        spike_scores.append(_spike_score(edge_mag, thr=args.edge_thr))
+        spike_scores_all.append(_spike_score(edge_mag, thr=args.edge_thr))
+        if int(np.sum(air_mask)) > 0:
+            air_thr = max(float(args.edge_thr) * 0.35, float(np.percentile(edge_mag[air_mask], 85.0)))
+        else:
+            air_thr = float(args.edge_thr)
+        spike_scores_air_thr.append(float(air_thr))
+        spike_scores_air.append(_spike_score(edge_mag, thr=air_thr, valid_mask=air_mask))
         tex_tenengrad.append(ten)
         tex_grad_p90.append(gp90)
         tex_edge_density.append(edens)
+        edge_anisotropy.append(ean)
         air_mask_ratios.append(air_ratio)
         air_edge_means.append(air_edge)
         air_hf_means.append(air_hf)
@@ -889,17 +1141,28 @@ def main() -> None:
     for i in range(1, len(grays)):
         flickers.append(float(np.mean(np.abs(grays[i] - grays[i - 1]))))
 
+    bg_sens_means = mode_meta.pop("bg_sensitivity_means", [])
+    bg_sens_ratios = mode_meta.pop("bg_sensitivity_ratios", [])
+    bg_sens_thr = float(mode_meta.get("bg_sensitivity_thr", 8.0 / 255.0))
+
     results = {
         "mode": str(args.mode),
         "num_frames": int(len(frames)),
         "bg": int(args.bg),
         "edge_thr": float(args.edge_thr),
         "BgLeakRatio_mean": float(np.mean(bg_leaks)) if bg_leaks else 0.0,
-        "SpikeScore_mean": float(np.mean(spike_scores)) if spike_scores else 0.0,
+        "SpikeScore_mean": float(np.mean(spike_scores_all)) if spike_scores_all else 0.0,
+        "SpikeScore_all_mean": float(np.mean(spike_scores_all)) if spike_scores_all else 0.0,
+        "SpikeScore_air_mean": float(np.mean(spike_scores_air)) if spike_scores_air else 0.0,
+        "SpikeScore_air_thr_mean": float(np.mean(spike_scores_air_thr)) if spike_scores_air_thr else float(args.edge_thr),
+        "BgSensitivity_mean": float(np.mean(bg_sens_means)) if bg_sens_means else 0.0,
+        "BgSensitivityRatio": float(np.mean(bg_sens_ratios)) if bg_sens_ratios else 0.0,
+        "BgSensitivity_thr": float(bg_sens_thr),
         "TemporalFlicker_mean": float(np.mean(flickers)) if flickers else 0.0,
         "TextureTenengrad_mean": float(np.mean(tex_tenengrad)) if tex_tenengrad else 0.0,
         "TextureGradP90_mean": float(np.mean(tex_grad_p90)) if tex_grad_p90 else 0.0,
         "TextureEdgeDensityAdaptive_mean": float(np.mean(tex_edge_density)) if tex_edge_density else 0.0,
+        "EdgeAnisotropy_mean": float(np.mean(edge_anisotropy)) if edge_anisotropy else 0.0,
         "AirMaskRatio_mean": float(np.mean(air_mask_ratios)) if air_mask_ratios else 0.0,
         "AirEdgeMean_mean": float(np.mean(air_edge_means)) if air_edge_means else 0.0,
         "AirHFMean_mean": float(np.mean(air_hf_means)) if air_hf_means else 0.0,
@@ -907,6 +1170,9 @@ def main() -> None:
         "AirFogRatio_mean": float(np.mean(air_fog_ratios)) if air_fog_ratios else 0.0,
         "AirArtifactScore_mean": float(np.mean(air_artifact_scores)) if air_artifact_scores else 0.0,
         "out_dir": str(out_dir),
+        "ellipsoid_proxy_enabled": bool(proxy_enabled),
+        "ellipsoid_proxy_out_dir": str(proxy_out_dir) if proxy_enabled else "",
+        "ellipsoid_proxy_opacity_mode": "opaque" if proxy_enabled else "off",
     }
     results.update(mode_meta)
     if "distance_factors" in mode_meta and isinstance(mode_meta["distance_factors"], list):
@@ -918,13 +1184,63 @@ def main() -> None:
     _write_bucket_means(results, "TextureTenengrad", tex_tenengrad, frame_tags)
     _write_bucket_means(results, "TextureGradP90", tex_grad_p90, frame_tags)
     _write_bucket_means(results, "TextureEdgeDensityAdaptive", tex_edge_density, frame_tags)
+    _write_bucket_means(results, "EdgeAnisotropy", edge_anisotropy, frame_tags)
     _write_bucket_means(results, "BgLeakRatio", bg_leaks, frame_tags)
-    _write_bucket_means(results, "SpikeScore", spike_scores, frame_tags)
+    _write_bucket_means(results, "SpikeScore", spike_scores_all, frame_tags)
+    _write_bucket_means(results, "SpikeScore_all", spike_scores_all, frame_tags)
+    _write_bucket_means(results, "SpikeScore_air", spike_scores_air, frame_tags)
+    if len(bg_sens_means) == len(frame_tags):
+        _write_bucket_means(results, "BgSensitivity", bg_sens_means, frame_tags)
+    if len(bg_sens_ratios) == len(frame_tags):
+        _write_bucket_means(results, "BgSensitivityRatio", bg_sens_ratios, frame_tags)
     _write_bucket_means(results, "AirEdgeMean", air_edge_means, frame_tags)
     _write_bucket_means(results, "AirHFMean", air_hf_means, frame_tags)
     _write_bucket_means(results, "AirBlobRatio", air_blob_ratios, frame_tags)
     _write_bucket_means(results, "AirFogRatio", air_fog_ratios, frame_tags)
     _write_bucket_means(results, "AirArtifactScore", air_artifact_scores, frame_tags)
+
+    # SGF-oriented novel-view quality summary:
+    # - StructureNearScore: emphasize near/mid clarity.
+    # - CleanFarScore: emphasize far-field artifact suppression.
+    # - NovelQualityScore: balanced summary (higher is better).
+    tex_pairs = _bucket_pairs(results, "TextureTenengrad")
+    ani_pairs = _bucket_pairs(results, "EdgeAnisotropy")
+    air_pairs = _bucket_pairs(results, "AirArtifactScore")
+    spike_pairs = _bucket_pairs(results, "SpikeScore_air")
+    bg_pairs = _bucket_pairs(results, "BgSensitivityRatio")
+    bg_leak_pairs = _bucket_pairs(results, "BgLeakRatio")
+
+    tex_near2 = _head_mean(tex_pairs, 2, float(np.mean(tex_tenengrad)) if tex_tenengrad else 0.0)
+    ani_near2 = _head_mean(ani_pairs, 2, float(np.mean(edge_anisotropy)) if edge_anisotropy else 0.0)
+    air_far2 = _tail_mean(air_pairs, 2, float(np.mean(air_artifact_scores)) if air_artifact_scores else 0.0)
+    spike_far2 = _tail_mean(spike_pairs, 2, float(np.mean(spike_scores_air)) if spike_scores_air else 0.0)
+    bg_far2 = _tail_mean(bg_pairs, 2, float(np.mean(bg_sens_ratios)) if bg_sens_ratios else 0.0)
+    bg_leak_far2 = _tail_mean(bg_leak_pairs, 2, float(np.mean(bg_leaks)) if bg_leaks else 0.0)
+    flick_mean = float(np.mean(flickers)) if flickers else 0.0
+
+    # Score shaping to [0,1] with fixed transforms (cross-experiment comparable on same dataset).
+    s_tex = 1.0 - math.exp(-0.04 * max(0.0, tex_near2))
+    s_ani = float(np.clip((ani_near2 - 0.10) / 0.45, 0.0, 1.0))
+    structure_near_score = float(np.clip(0.75 * s_tex + 0.25 * s_ani, 0.0, 1.0))
+
+    c_air = math.exp(-2.4 * max(0.0, air_far2))
+    c_spike = math.exp(-120.0 * max(0.0, spike_far2))
+    c_bg = math.exp(-10.0 * max(0.0, bg_far2))
+    c_bg_leak = math.exp(-30.0 * max(0.0, bg_leak_far2))
+    c_flick = math.exp(-3.0 * max(0.0, flick_mean))
+    clean_far_score = float(np.clip(0.50 * c_air + 0.20 * c_spike + 0.15 * c_bg + 0.05 * c_bg_leak + 0.10 * c_flick, 0.0, 1.0))
+
+    novel_quality_score = float(np.clip(0.60 * structure_near_score + 0.40 * clean_far_score, 0.0, 1.0))
+
+    results["SGF_TextureNear2_mean"] = float(tex_near2)
+    results["SGF_EdgeAnisotropyNear2_mean"] = float(ani_near2)
+    results["SGF_AirArtifactFar2_mean"] = float(air_far2)
+    results["SGF_SpikeFar2_mean"] = float(spike_far2)
+    results["SGF_BgLeakFar2_mean"] = float(bg_far2)
+    results["SGF_BgLeakLegacyFar2_mean"] = float(bg_leak_far2)
+    results["SGF_StructureNearScore"] = structure_near_score
+    results["SGF_CleanFarScore"] = clean_far_score
+    results["SGF_NovelQualityScore"] = novel_quality_score
 
     if args.mode == "orbit":
         out_json = out_dir / "novel_view_metrics.json"
