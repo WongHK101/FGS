@@ -9,10 +9,40 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+
+METRIC_DIRECTION: Dict[str, str] = {
+    # higher is better
+    "EdgePSNR": "high",
+    "GradientCorr": "high",
+    "EdgeF1": "high",
+    "EdgeF1_best": "high",
+    "EdgeF1_mean": "high",
+    "EdgePR_AUC": "high",
+    "AlignedPSNR": "high",
+    "AlignedEdgePSNR": "high",
+    "AlignedGradientCorr": "high",
+    "AlignedEdgeF1": "high",
+    "AlignedEdgeF1_best": "high",
+    "AlignedEdgeF1_mean": "high",
+    "AlignedEdgePR_AUC": "high",
+    "SGF_StructureScore": "high",
+    "SGF_CleanScore": "high",
+    "SGF_FidelityScore": "high",
+    "SGF_MetricsPlusScore": "high",
+    # lower is better
+    "EdgeL1": "low",
+    "HFAbsMeanDiff": "low",
+    "BgLeakRatio": "low",
+    "BgLeakRatio_band": "low",
+    "EdgeHaloScore": "low",
+    "AirArtifactEdgeExcess": "low",
+    "AirArtifactHFMean": "low",
+    "AirArtifactBrightExcess": "low",
+}
 
 
 def _load_rgb(path: Path) -> np.ndarray:
@@ -245,6 +275,12 @@ def _bg_leak_ratio(render: np.ndarray, bg: int, thr: float = 3.0 / 255.0) -> flo
     return float(np.mean(mask))
 
 
+def _bg_leak_mask(render: np.ndarray, bg: int, thr: float = 3.0 / 255.0) -> np.ndarray:
+    if bg == 0:
+        return np.max(render, axis=2) <= thr
+    return np.min(render, axis=2) >= (1.0 - thr)
+
+
 def _largest_top_connected(mask: np.ndarray) -> np.ndarray:
     h, w = mask.shape
     visited = np.zeros((h, w), dtype=bool)
@@ -354,6 +390,229 @@ def _edge_f1_best(edge_r: np.ndarray, edge_g: np.ndarray, fallback_thr: float) -
     return float(best)
 
 
+def _edge_threshold_grid(edge_r: np.ndarray, edge_g: np.ndarray, fallback_thr: float) -> np.ndarray:
+    vals = np.concatenate([edge_r.reshape(-1), edge_g.reshape(-1)], axis=0)
+    if vals.size == 0:
+        return np.array([max(1e-4, float(fallback_thr))], dtype=np.float32)
+    q = np.linspace(0.60, 0.99, 20)
+    thrs = np.quantile(vals, q)
+    thrs = np.unique(np.clip(thrs, 1e-4, 1.0))
+    if thrs.size == 0:
+        thrs = np.array([max(1e-4, float(fallback_thr))], dtype=np.float32)
+    return thrs.astype(np.float32)
+
+
+def _edge_f1_mean(edge_r: np.ndarray, edge_g: np.ndarray, fallback_thr: float) -> float:
+    thrs = _edge_threshold_grid(edge_r, edge_g, fallback_thr)
+    vals = [_edge_f1(edge_r, edge_g, float(t)) for t in thrs]
+    if not vals:
+        return 0.0
+    return float(np.mean(vals))
+
+
+def _edge_gt_binary(edge_g: np.ndarray) -> np.ndarray:
+    if edge_g.size <= 0:
+        return np.zeros_like(edge_g, dtype=bool)
+    thr = float(np.percentile(edge_g, 80.0))
+    thr = max(thr, 1e-4)
+    return edge_g >= thr
+
+
+def _edge_pr_auc(edge_r: np.ndarray, edge_g: np.ndarray, fallback_thr: float) -> float:
+    gt = _edge_gt_binary(edge_g)
+    gt_pos = int(gt.sum())
+    if gt_pos <= 0:
+        return 0.0
+    thrs = _edge_threshold_grid(edge_r, edge_g, fallback_thr)
+    prs: List[float] = []
+    rcs: List[float] = []
+    for t in thrs:
+        pred = edge_r >= float(t)
+        tp = int(np.logical_and(pred, gt).sum())
+        fp = int(np.logical_and(pred, ~gt).sum())
+        fn = int(np.logical_and(~pred, gt).sum())
+        denom_p = tp + fp
+        denom_r = tp + fn
+        precision = (tp / denom_p) if denom_p > 0 else 0.0
+        recall = (tp / denom_r) if denom_r > 0 else 0.0
+        prs.append(float(precision))
+        rcs.append(float(recall))
+    if not prs:
+        return 0.0
+    # Monotonic envelope on precision to stabilize AUC.
+    pairs = sorted(zip(rcs, prs), key=lambda x: x[0])
+    r = np.asarray([p[0] for p in pairs], dtype=np.float32)
+    p = np.asarray([p[1] for p in pairs], dtype=np.float32)
+    for i in range(len(p) - 2, -1, -1):
+        p[i] = max(p[i], p[i + 1])
+    trap = getattr(np, "trapezoid", np.trapz)
+    auc = float(trap(p, r))
+    return max(0.0, min(1.0, auc))
+
+
+def _binary_dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    out = mask.astype(bool)
+    r = max(0, int(radius))
+    for _ in range(r):
+        pad = np.pad(out, ((1, 1), (1, 1)), mode="edge")
+        out = (
+            pad[:-2, :-2] | pad[:-2, 1:-1] | pad[:-2, 2:] |
+            pad[1:-1, :-2] | pad[1:-1, 1:-1] | pad[1:-1, 2:] |
+            pad[2:, :-2] | pad[2:, 1:-1] | pad[2:, 2:]
+        )
+    return out
+
+
+def _boundary_band_mask(edge_g: np.ndarray, radius: int) -> np.ndarray:
+    gt = _edge_gt_binary(edge_g)
+    if int(gt.sum()) <= 0:
+        return np.zeros_like(gt, dtype=bool)
+    band = _binary_dilate(gt, max(1, int(radius)))
+    return band
+
+
+def _warn_once(msg: str, warned: set) -> None:
+    if msg in warned:
+        return
+    warned.add(msg)
+    print(f"[WARN] {msg}")
+
+
+def _normalize_extra_iqa_name(name: str) -> str:
+    x = str(name).strip().lower().replace("_", "").replace("-", "")
+    mapping = {
+        "msssim": "msssim",
+        "hdrvdp": "hdrvdp3",
+    }
+    return mapping.get(x, x)
+
+
+class _ExtraIQAEngine:
+    def __init__(self, names: List[str], channel: str):
+        self.names = [_normalize_extra_iqa_name(n) for n in names if str(n).strip()]
+        self.channel = "rgb" if str(channel).lower() == "rgb" else "y"
+        self.warned: set = set()
+        self.pyiqa = None
+        self.piq = None
+        self._pyiqa_metrics: Dict[str, Callable] = {}
+        self._piq_metrics: Dict[str, Callable] = {}
+        if self.names:
+            self._init_backends()
+
+    def _init_backends(self) -> None:
+        try:
+            import pyiqa  # type: ignore
+            self.pyiqa = pyiqa
+        except Exception:
+            self.pyiqa = None
+        try:
+            import piq  # type: ignore
+            self.piq = piq
+        except Exception:
+            self.piq = None
+
+    def _to_tensor(self, img: np.ndarray):
+        import torch
+        if self.channel == "rgb":
+            arr = np.transpose(img, (2, 0, 1))[None, ...]
+        else:
+            g = _rgb_to_gray(img)
+            arr = g[None, None, ...]
+        return torch.from_numpy(arr.astype(np.float32))
+
+    def _create_pyiqa_metric(self, name: str):
+        if self.pyiqa is None:
+            return None
+        if name in self._pyiqa_metrics:
+            return self._pyiqa_metrics[name]
+        candidates = {
+            "flip": ["flip"],
+            "dists": ["dists"],
+            "fsim": ["fsim"],
+            "vif": ["vif", "vifp"],
+            "msssim": ["ms_ssim", "ms-ssim"],
+            "gmsd": ["gmsd"],
+            "haarpsi": ["haarpsi"],
+            "niqe": ["niqe"],
+            "brisque": ["brisque"],
+            "piqe": ["piqe"],
+            "hdrvdp3": ["hdrvdp3", "hdrvdp"],
+        }.get(name, [name])
+        for c in candidates:
+            try:
+                fn = self.pyiqa.create_metric(c, device="cpu", as_loss=False)
+                self._pyiqa_metrics[name] = fn
+                return fn
+            except Exception:
+                continue
+        return None
+
+    def _create_piq_metric(self, name: str):
+        if self.piq is None:
+            return None
+        if name in self._piq_metrics:
+            return self._piq_metrics[name]
+        fn = None
+        try:
+            if name == "msssim":
+                fn = lambda x, y: self.piq.multi_scale_ssim(x, y, data_range=1.0)
+            elif name == "vif":
+                fn = lambda x, y: self.piq.vif_p(x, y, data_range=1.0)
+            elif name == "gmsd":
+                fn = lambda x, y: self.piq.gmsd(x, y, data_range=1.0)
+            elif name == "fsim":
+                fn = lambda x, y: self.piq.fsim(x, y, data_range=1.0)
+            elif name == "haarpsi":
+                fn = lambda x, y: self.piq.haarpsi(x, y, data_range=1.0)
+        except Exception:
+            fn = None
+        if fn is not None:
+            self._piq_metrics[name] = fn
+        return fn
+
+    def evaluate_pair(self, render: np.ndarray, gt: np.ndarray) -> Dict[str, float]:
+        if not self.names:
+            return {}
+        out: Dict[str, float] = {}
+        try:
+            x = self._to_tensor(render)
+            y = self._to_tensor(gt)
+        except Exception as exc:
+            _warn_once(f"extra_iqa tensor conversion failed: {exc}", self.warned)
+            for n in self.names:
+                out[n] = float("nan")
+            return out
+
+        fr_names = {"flip", "dists", "fsim", "vif", "msssim", "gmsd", "haarpsi", "hdrvdp3"}
+        nr_names = {"niqe", "brisque", "piqe"}
+        for n in self.names:
+            score = float("nan")
+            done = False
+
+            fn_py = self._create_pyiqa_metric(n)
+            if fn_py is not None:
+                try:
+                    val = fn_py(x, y) if n in fr_names else fn_py(x)
+                    score = float(val.detach().cpu().reshape(-1)[0].item())
+                    done = True
+                except Exception as exc:
+                    _warn_once(f"extra_iqa pyiqa '{n}' failed: {exc}", self.warned)
+
+            if (not done) and (n in fr_names):
+                fn_piq = self._create_piq_metric(n)
+                if fn_piq is not None:
+                    try:
+                        val = fn_piq(x, y)
+                        score = float(val.detach().cpu().reshape(-1)[0].item())
+                        done = True
+                    except Exception as exc:
+                        _warn_once(f"extra_iqa piq '{n}' failed: {exc}", self.warned)
+
+            if not done:
+                _warn_once(f"extra_iqa '{n}' unavailable; writing NaN", self.warned)
+            out[n] = score
+        return out
+
 def _format_float(v: float) -> str:
     if math.isfinite(v):
         return f"{v:.6f}"
@@ -396,7 +655,16 @@ def _iter_pairs(renders_dir: Path, gt_dir: Path) -> Iterable[Tuple[str, np.ndarr
         yield name, _load_rgb(renders_dir / name), _load_rgb(gt_path)
 
 
-def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json: bool) -> None:
+def evaluate(
+    model_paths: List[str],
+    k: int,
+    bg: int,
+    edge_thr: float,
+    save_json: bool,
+    edge_band_radius: int = 5,
+    extra_iqa: str = "",
+    extra_iqa_space: str = "y",
+) -> None:
     full_dict = {}
 
     for scene_dir in model_paths:
@@ -429,7 +697,14 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             aligned_edge_psnrs: List[float] = []
             aligned_grad_corrs: List[float] = []
             aligned_edge_f1s: List[float] = []
+            aligned_edge_f1_bests: List[float] = []
+            edge_f1_means: List[float] = []
+            edge_pr_aucs: List[float] = []
+            aligned_edge_f1_means: List[float] = []
+            aligned_edge_pr_aucs: List[float] = []
             bg_leaks: List[float] = []
+            bg_leaks_band: List[float] = []
+            edge_halo_scores: List[float] = []
             tex_lcn_ten_r: List[float] = []
             tex_lcn_ten_g: List[float] = []
             tex_lcn_edge_r: List[float] = []
@@ -440,6 +715,9 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             air_edge_excess: List[float] = []
             air_hf_mean: List[float] = []
             air_bright_excess: List[float] = []
+            iqa_names = [t.strip() for t in str(extra_iqa).split(",") if t.strip()]
+            iqa_engine = _ExtraIQAEngine(iqa_names, channel=extra_iqa_space)
+            iqa_acc: Dict[str, List[float]] = {n: [] for n in iqa_engine.names}
 
             for _, render, gt in _iter_pairs(renders_dir, gt_dir):
                 if render.shape != gt.shape:
@@ -455,6 +733,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 grad_corrs.append(_corrcoef_safe(edge_r, edge_g))
                 edge_f1s.append(_edge_f1(edge_r, edge_g, edge_thr))
                 edge_f1_bests.append(_edge_f1_best(edge_r, edge_g, edge_thr))
+                edge_f1_means.append(_edge_f1_mean(edge_r, edge_g, edge_thr))
+                edge_pr_aucs.append(_edge_pr_auc(edge_r, edge_g, edge_thr))
 
                 lap_r = _laplacian(gray_r)
                 lap_g = _laplacian(gray_g)
@@ -469,7 +749,21 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 edge_r_al, edge_g_al = _crop_by_shift_2d(edge_r, edge_g, best_dx, best_dy)
                 aligned_grad_corrs.append(_corrcoef_safe(edge_r_al, edge_g_al))
                 aligned_edge_f1s.append(_edge_f1(edge_r_al, edge_g_al, edge_thr))
+                aligned_edge_f1_bests.append(_edge_f1_best(edge_r_al, edge_g_al, edge_thr))
+                aligned_edge_f1_means.append(_edge_f1_mean(edge_r_al, edge_g_al, edge_thr))
+                aligned_edge_pr_aucs.append(_edge_pr_auc(edge_r_al, edge_g_al, edge_thr))
                 bg_leaks.append(_bg_leak_ratio(render, bg))
+
+                # Boundary-band artifact metrics: more sensitive to halo/bleeding than full-image averages.
+                band = _boundary_band_mask(edge_g, max(1, int(edge_band_radius)))
+                leak_mask = _bg_leak_mask(render, bg).astype(np.float32)
+                leak_r_al, _ = _crop_by_shift_2d(leak_mask, leak_mask, best_dx, best_dy)
+                _, band_g_al = _crop_by_shift_2d(
+                    np.zeros_like(band, dtype=np.float32), band.astype(np.float32), best_dx, best_dy
+                )
+                band_bool = band_g_al > 0.5
+                bg_leaks_band.append(_masked_mean((leak_r_al > 0.5).astype(np.float32), band_bool))
+                edge_halo_scores.append(_masked_mean(np.maximum(edge_r_al - edge_g_al, 0.0), band_bool))
 
                 # Brightness-insensitive texture clarity.
                 ten_r, ed_r = _texture_metrics_lcn(gray_r)
@@ -488,6 +782,12 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 air_hf_mean.append(_masked_mean(np.abs(lap_r), air_mask))
                 air_bright_excess.append(_masked_mean(np.maximum(gray_r - gray_g, 0.0), air_mask))
 
+                if iqa_engine.names:
+                    iqa_vals = iqa_engine.evaluate_pair(render, gt)
+                    for n in iqa_engine.names:
+                        v = float(iqa_vals.get(n, float("nan")))
+                        iqa_acc.setdefault(n, []).append(v)
+
             if not edge_psnrs:
                 continue
 
@@ -496,6 +796,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_grad_corr = float(np.mean(grad_corrs))
             mean_edge_f1 = float(np.mean(edge_f1s))
             mean_edge_f1_best = float(np.mean(edge_f1_bests))
+            mean_edge_f1_mean = float(np.mean(edge_f1_means))
+            mean_edge_pr_auc = float(np.mean(edge_pr_aucs))
             mean_lap_r = float(np.mean(lap_var_r))
             mean_lap_g = float(np.mean(lap_var_g))
             lap_ratio = mean_lap_r / mean_lap_g if mean_lap_g > 0.0 else float("inf")
@@ -506,7 +808,12 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_aligned_edge_psnr = float(np.mean(aligned_edge_psnrs))
             mean_aligned_grad_corr = float(np.mean(aligned_grad_corrs))
             mean_aligned_edge_f1 = float(np.mean(aligned_edge_f1s))
+            mean_aligned_edge_f1_best = float(np.mean(aligned_edge_f1_bests))
+            mean_aligned_edge_f1_mean = float(np.mean(aligned_edge_f1_means))
+            mean_aligned_edge_pr_auc = float(np.mean(aligned_edge_pr_aucs))
             mean_bg_leak = float(np.mean(bg_leaks))
+            mean_bg_leak_band = float(np.mean(bg_leaks_band))
+            mean_edge_halo = float(np.mean(edge_halo_scores))
             mean_tex_ten_r = float(np.mean(tex_lcn_ten_r))
             mean_tex_ten_g = float(np.mean(tex_lcn_ten_g))
             tex_ten_ratio = mean_tex_ten_r / mean_tex_ten_g if mean_tex_ten_g > 0.0 else float("inf")
@@ -520,6 +827,14 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             mean_air_edge_excess = float(np.mean(air_edge_excess))
             mean_air_hf = float(np.mean(air_hf_mean))
             mean_air_bright_excess = float(np.mean(air_bright_excess))
+            iqa_means: Dict[str, float] = {}
+            for n, vals in iqa_acc.items():
+                if not vals:
+                    iqa_means[n] = float("nan")
+                    continue
+                arr = np.asarray(vals, dtype=np.float32)
+                valid = arr[np.isfinite(arr)]
+                iqa_means[n] = float(np.mean(valid)) if valid.size > 0 else float("nan")
 
             # SGF-oriented derived scores (higher is better):
             s_grad = _score_high_unit(0.5 * (mean_aligned_grad_corr + 1.0))
@@ -585,6 +900,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  GradientCorr(mean): {_format_float(mean_grad_corr)}")
             print(f"  EdgeF1@{edge_thr:.3f}(mean): {_format_float(mean_edge_f1)}")
             print(f"  EdgeF1_best(mean): {_format_float(mean_edge_f1_best)}")
+            print(f"  EdgeF1_mean(mean): {_format_float(mean_edge_f1_mean)}")
+            print(f"  EdgePR_AUC(mean): {_format_float(mean_edge_pr_auc)}")
             print(f"  LapVar(render)(mean): {_format_float(mean_lap_r)}")
             print(f"  LapVar(gt)(mean): {_format_float(mean_lap_g)}")
             print(f"  LapVarRatio(mean): {_format_float(lap_ratio)}")
@@ -595,7 +912,12 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  AlignedEdgePSNR@{k}(mean): {_format_float(mean_aligned_edge_psnr)}")
             print(f"  AlignedGradientCorr@{k}(mean): {_format_float(mean_aligned_grad_corr)}")
             print(f"  AlignedEdgeF1@{k}(mean): {_format_float(mean_aligned_edge_f1)}")
+            print(f"  AlignedEdgeF1_best@{k}(mean): {_format_float(mean_aligned_edge_f1_best)}")
+            print(f"  AlignedEdgeF1_mean@{k}(mean): {_format_float(mean_aligned_edge_f1_mean)}")
+            print(f"  AlignedEdgePR_AUC@{k}(mean): {_format_float(mean_aligned_edge_pr_auc)}")
             print(f"  BgLeakRatio(mean): {_format_float(mean_bg_leak)}")
+            print(f"  BgLeakRatio_band(mean): {_format_float(mean_bg_leak_band)}")
+            print(f"  EdgeHaloScore(mean): {_format_float(mean_edge_halo)}")
             print(f"  TextureLCN_Tenengrad(render)(mean): {_format_float(mean_tex_ten_r)}")
             print(f"  TextureLCN_Tenengrad(gt)(mean): {_format_float(mean_tex_ten_g)}")
             print(f"  TextureLCN_TenengradRatio(mean): {_format_float(tex_ten_ratio)}")
@@ -613,6 +935,9 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
             print(f"  SGF_CleanScore(mean): {_format_float(sgf_clean_score)}")
             print(f"  SGF_FidelityScore(mean): {_format_float(sgf_fidelity_score)}")
             print(f"  SGF_MetricsPlusScore(mean): {_format_float(sgf_metrics_plus_score)}")
+            if iqa_means:
+                for n in sorted(iqa_means.keys()):
+                    print(f"  IQA_{n}(mean): {_format_float(iqa_means[n])}")
 
             full_dict[scene_dir][method] = {
                 "EdgePSNR": mean_edge_psnr,
@@ -620,6 +945,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "GradientCorr": mean_grad_corr,
                 "EdgeF1": mean_edge_f1,
                 "EdgeF1_best": mean_edge_f1_best,
+                "EdgeF1_mean": mean_edge_f1_mean,
+                "EdgePR_AUC": mean_edge_pr_auc,
                 "LapVar_render": mean_lap_r,
                 "LapVar_gt": mean_lap_g,
                 "LapVarRatio": lap_ratio,
@@ -630,7 +957,12 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "AlignedEdgePSNR": mean_aligned_edge_psnr,
                 "AlignedGradientCorr": mean_aligned_grad_corr,
                 "AlignedEdgeF1": mean_aligned_edge_f1,
+                "AlignedEdgeF1_best": mean_aligned_edge_f1_best,
+                "AlignedEdgeF1_mean": mean_aligned_edge_f1_mean,
+                "AlignedEdgePR_AUC": mean_aligned_edge_pr_auc,
                 "BgLeakRatio": mean_bg_leak,
+                "BgLeakRatio_band": mean_bg_leak_band,
+                "EdgeHaloScore": mean_edge_halo,
                 "TextureLCN_Tenengrad_render": mean_tex_ten_r,
                 "TextureLCN_Tenengrad_gt": mean_tex_ten_g,
                 "TextureLCN_TenengradRatio": tex_ten_ratio,
@@ -649,6 +981,8 @@ def evaluate(model_paths: List[str], k: int, bg: int, edge_thr: float, save_json
                 "SGF_FidelityScore": sgf_fidelity_score,
                 "SGF_MetricsPlusScore": sgf_metrics_plus_score,
             }
+            for n, v in iqa_means.items():
+                full_dict[scene_dir][method][f"IQA_{n}"] = float(v)
 
         if save_json:
             out_path = Path(scene_dir) / "results_plus.json"
@@ -661,9 +995,19 @@ def main() -> None:
     parser.add_argument("--K", type=int, default=8, help="Search window for AlignedPSNR (default: 8)")
     parser.add_argument("--bg", type=int, default=0, choices=[0, 1], help="Background color: 0=black, 1=white")
     parser.add_argument("--edge_thr", type=float, default=0.1, help="Sobel edge threshold for EdgeF1 (default: 0.1)")
+    parser.add_argument("--edge_band_radius", type=int, default=5, help="Boundary band radius in px for halo/bg-leak metrics (default: 5)")
+    parser.add_argument("--extra_iqa", type=str, default="",
+                        help="Optional IQA set, comma-separated: flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3")
+    parser.add_argument("--extra_iqa_space", type=str, default="y", choices=["y", "rgb"],
+                        help="IQA input space (default: y)")
     parser.add_argument("--save_json", action="store_true", default=False, help="Write results_plus.json (default: off)")
     args = parser.parse_args()
-    evaluate(args.model_paths, args.K, args.bg, args.edge_thr, args.save_json)
+    evaluate(
+        args.model_paths, args.K, args.bg, args.edge_thr, args.save_json,
+        edge_band_radius=args.edge_band_radius,
+        extra_iqa=args.extra_iqa,
+        extra_iqa_space=args.extra_iqa_space,
+    )
 
 
 if __name__ == "__main__":

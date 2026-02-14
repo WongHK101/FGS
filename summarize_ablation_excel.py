@@ -199,6 +199,10 @@ def _parse_results_json(path: Path) -> Dict[str, float]:
         fv = _to_number(v)
         if fv is not None:
             out[str(k)] = fv
+        elif isinstance(v, (int, float)) and not math.isfinite(float(v)):
+            # Keep non-finite numeric keys (e.g., IQA_* when backend missing)
+            # so headers remain visible in summary tables.
+            out[str(k)] = None
     return out
 
 
@@ -217,6 +221,8 @@ def _parse_novel_view_json(path: Path) -> Dict[str, float]:
         fv = _to_number(v)
         if fv is not None:
             out[str(k)] = fv
+        elif isinstance(v, (int, float)) and not math.isfinite(float(v)):
+            out[str(k)] = None
     return out
 
 

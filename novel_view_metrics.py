@@ -126,6 +126,41 @@ def _edge_anisotropy(gray: np.ndarray) -> float:
     return float(np.clip((l1 - l2) / max(l1 + l2, 1e-12), 0.0, 1.0))
 
 
+def _nonair_noise_penalty(gray: np.ndarray, air_mask: np.ndarray) -> float:
+    # Optional penalty for isotropic high-frequency clutter in non-air regions.
+    if air_mask.shape != gray.shape:
+        return 0.0
+    non_air = ~air_mask
+    if int(np.sum(non_air)) < 64:
+        return 0.0
+    g = _local_contrast_norm(gray)
+    gx, gy = _sobel_xy(g)
+    mag = np.hypot(gx, gy)
+    if int(np.sum(non_air)) <= 0:
+        return 0.0
+    thr = float(np.percentile(mag[non_air], 80.0))
+    mask = np.logical_and(non_air, mag > max(thr, 1e-6))
+    if int(np.sum(mask)) < 32:
+        return 0.0
+    gxx = gx[mask] * gx[mask]
+    gyy = gy[mask] * gy[mask]
+    gxy = gx[mask] * gy[mask]
+    jxx = float(np.mean(gxx))
+    jyy = float(np.mean(gyy))
+    jxy = float(np.mean(gxy))
+    tr = max(jxx + jyy, 1e-12)
+    det = (jxx * jyy) - (jxy * jxy)
+    disc = max(0.0, 0.25 * tr * tr - det)
+    root = math.sqrt(disc)
+    l1 = 0.5 * tr + root
+    l2 = max(0.0, 0.5 * tr - root)
+    anis = float(np.clip((l1 - l2) / max(l1 + l2, 1e-12), 0.0, 1.0))
+    iso = 1.0 - anis
+    lap = np.abs(_laplacian(gray))
+    hf = float(np.mean(lap[mask]))
+    return float(iso * hf)
+
+
 def _laplacian(gray: np.ndarray) -> np.ndarray:
     k = np.array([[0, 1, 0],
                   [1, -4, 1],
@@ -219,6 +254,17 @@ def _parse_float_list(raw: str, default_vals: List[float], clip_min: float = Non
     if not out:
         out = list(default_vals)
     return out
+
+
+def _str2bool(v: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    t = str(v).strip().lower()
+    if t in ("1", "true", "yes", "y", "on"):
+        return True
+    if t in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {v}")
 
 
 def _camera_mats(cam) -> Tuple[np.ndarray, np.ndarray]:
@@ -448,6 +494,60 @@ def _collect_frame_tags(out_dir: Path, num_frames: int) -> List[Tuple[int, bool]
     return out
 
 
+def _collect_frame_names(out_dir: Path, num_frames: int) -> List[str]:
+    names = [f.name for f in sorted(out_dir.glob("*.png"))]
+    if len(names) < num_frames:
+        return [f"{i:04d}.png" for i in range(max(0, int(num_frames)))]
+    return names[:num_frames]
+
+
+def _grid_local_group_from_name(name: str) -> Optional[Tuple[int, int, int, bool]]:
+    # Example: 0000_dir00_pit00_dst00_a123_p30_de12.34.png
+    m = re.search(r"_dir(\d+)_pit(\d+)_dst(\d+)", name)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3)), ("_topdown_" in name)
+
+
+def _local_flicker_stats(grays: List[np.ndarray], frame_names: List[str]) -> Tuple[List[float], float, float]:
+    # Local flicker: only compare adjacent distance levels under the same (dir, pit).
+    # This avoids penalizing large viewpoint jumps in grid traversal.
+    n = min(len(grays), len(frame_names))
+    if n <= 1:
+        return [], 0.0, 0.0
+    groups: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+    for i in range(n):
+        parsed = _grid_local_group_from_name(frame_names[i])
+        if parsed is None:
+            continue
+        dir_i, pit_i, dst_i, is_topdown = parsed
+        if is_topdown:
+            continue
+        groups.setdefault((dir_i, pit_i), []).append((dst_i, i))
+
+    vals: List[float] = []
+    for _k, arr in groups.items():
+        if len(arr) < 2:
+            continue
+        arr = sorted(arr, key=lambda x: x[0])
+        for j in range(1, len(arr)):
+            i0 = arr[j - 1][1]
+            i1 = arr[j][1]
+            vals.append(float(np.mean(np.abs(grays[i1] - grays[i0]))))
+
+    if not vals:
+        return [], 0.0, 0.0
+    return vals, float(np.mean(vals)), float(np.percentile(vals, 90.0))
+
+
+def _append_mean_p90(results: Dict[str, Any], key: str, values: List[float]) -> None:
+    if not values:
+        return
+    arr = np.asarray(values, dtype=np.float64)
+    results[f"{key}_mean"] = float(np.mean(arr))
+    results[f"{key}_p90"] = float(np.percentile(arr, 90.0))
+
+
 def _write_bucket_means(results: Dict[str, Any], key_prefix: str, values: List[float], frame_tags: List[Tuple[int, bool]]) -> None:
     if not values or not frame_tags or len(values) != len(frame_tags):
         return
@@ -664,8 +764,6 @@ def _render_mode_orbit(
     frames: List[np.ndarray] = []
     bg_sens_means: List[float] = []
     bg_sens_ratios: List[float] = []
-    bg_sens_means: List[float] = []
-    bg_sens_ratios: List[float] = []
 
     for i in range(n):
         theta = 2.0 * math.pi * (i / float(n))
@@ -729,6 +827,8 @@ def _render_mode_test_offset(
     if proxy_enabled and proxy_dir is not None:
         _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    bg_sens_means: List[float] = []
+    bg_sens_ratios: List[float] = []
 
     for i, src_cam in enumerate(cams):
         _, c2w = _camera_mats(src_cam)
@@ -1027,6 +1127,10 @@ def main() -> None:
     parser.add_argument("--grid_jitter", action="store_true", default=False, help="Enable small random jitter in grid72")
     parser.add_argument("--grid_pos_jitter", type=float, default=0.05, help="grid72 distance jitter ratio")
     parser.add_argument("--grid_ang_jitter_deg", type=float, default=2.0, help="grid72 angle jitter in degrees")
+    parser.add_argument("--clean_use_local_flicker", type=_str2bool, nargs="?", const=True, default=True,
+                        help="Use local flicker (same dir/pit) in SGF clean score when available (default: True)")
+    parser.add_argument("--structure_noise_penalty_w", type=float, default=0.0,
+                        help="Optional weight for non-air isotropic noise penalty in structure score (default: 0.0/off)")
     parser.add_argument("--dump_ellipsoid_proxy", action="store_true", default=False,
                         help="Dump per-view ellipsoid proxy images with exact same camera poses (default: off)")
     parser.add_argument("--ellipsoid_proxy_dir", type=str, default="",
@@ -1094,6 +1198,7 @@ def main() -> None:
             )
 
     frame_tags = _collect_frame_tags(out_dir, len(frames))
+    frame_names = _collect_frame_names(out_dir, len(frames))
     bg_leaks: List[float] = []
     spike_scores_all: List[float] = []
     spike_scores_air: List[float] = []
@@ -1108,6 +1213,7 @@ def main() -> None:
     air_blob_ratios: List[float] = []
     air_fog_ratios: List[float] = []
     air_artifact_scores: List[float] = []
+    nonair_noise_penalties: List[float] = []
     grays: List[np.ndarray] = []
 
     for img in frames:
@@ -1136,10 +1242,14 @@ def main() -> None:
         air_blob_ratios.append(air_blob)
         air_fog_ratios.append(air_fog)
         air_artifact_scores.append(air_score)
+        nonair_noise_penalties.append(_nonair_noise_penalty(gray, air_mask))
 
-    flickers: List[float] = []
+    flickers_global: List[float] = []
     for i in range(1, len(grays)):
-        flickers.append(float(np.mean(np.abs(grays[i] - grays[i - 1]))))
+        flickers_global.append(float(np.mean(np.abs(grays[i] - grays[i - 1]))))
+    flickers_local, flick_local_mean, flick_local_p90 = _local_flicker_stats(grays, frame_names)
+    flick_global_mean = float(np.mean(flickers_global)) if flickers_global else 0.0
+    flick_global_p90 = float(np.percentile(flickers_global, 90.0)) if flickers_global else 0.0
 
     bg_sens_means = mode_meta.pop("bg_sensitivity_means", [])
     bg_sens_ratios = mode_meta.pop("bg_sensitivity_ratios", [])
@@ -1158,7 +1268,11 @@ def main() -> None:
         "BgSensitivity_mean": float(np.mean(bg_sens_means)) if bg_sens_means else 0.0,
         "BgSensitivityRatio": float(np.mean(bg_sens_ratios)) if bg_sens_ratios else 0.0,
         "BgSensitivity_thr": float(bg_sens_thr),
-        "TemporalFlicker_mean": float(np.mean(flickers)) if flickers else 0.0,
+        "TemporalFlicker_mean": float(flick_global_mean),  # legacy alias
+        "TemporalFlicker_global_mean": float(flick_global_mean),
+        "TemporalFlicker_global_p90": float(flick_global_p90),
+        "TemporalFlicker_local_mean": float(flick_local_mean),
+        "TemporalFlicker_local_p90": float(flick_local_p90),
         "TextureTenengrad_mean": float(np.mean(tex_tenengrad)) if tex_tenengrad else 0.0,
         "TextureGradP90_mean": float(np.mean(tex_grad_p90)) if tex_grad_p90 else 0.0,
         "TextureEdgeDensityAdaptive_mean": float(np.mean(tex_edge_density)) if tex_edge_density else 0.0,
@@ -1169,11 +1283,20 @@ def main() -> None:
         "AirBlobRatio_mean": float(np.mean(air_blob_ratios)) if air_blob_ratios else 0.0,
         "AirFogRatio_mean": float(np.mean(air_fog_ratios)) if air_fog_ratios else 0.0,
         "AirArtifactScore_mean": float(np.mean(air_artifact_scores)) if air_artifact_scores else 0.0,
+        "NonAirNoisePenalty_mean": float(np.mean(nonair_noise_penalties)) if nonair_noise_penalties else 0.0,
         "out_dir": str(out_dir),
         "ellipsoid_proxy_enabled": bool(proxy_enabled),
         "ellipsoid_proxy_out_dir": str(proxy_out_dir) if proxy_enabled else "",
         "ellipsoid_proxy_opacity_mode": "opaque" if proxy_enabled else "off",
     }
+    if bg_sens_means:
+        results["BgSensitivity_p50"] = float(np.percentile(bg_sens_means, 50.0))
+    if bg_sens_ratios:
+        results["BgSensitivityRatio_p50"] = float(np.percentile(bg_sens_ratios, 50.0))
+    if flickers_global:
+        results["TemporalFlicker_global_p50"] = float(np.percentile(flickers_global, 50.0))
+    if flickers_local:
+        results["TemporalFlicker_local_p50"] = float(np.percentile(flickers_local, 50.0))
     results.update(mode_meta)
     if "distance_factors" in mode_meta and isinstance(mode_meta["distance_factors"], list):
         for i, v in enumerate(mode_meta["distance_factors"]):
@@ -1198,6 +1321,13 @@ def main() -> None:
     _write_bucket_means(results, "AirBlobRatio", air_blob_ratios, frame_tags)
     _write_bucket_means(results, "AirFogRatio", air_fog_ratios, frame_tags)
     _write_bucket_means(results, "AirArtifactScore", air_artifact_scores, frame_tags)
+    _write_bucket_means(results, "NonAirNoisePenalty", nonair_noise_penalties, frame_tags)
+
+    _append_mean_p90(results, "SpikeScore_all", spike_scores_all)
+    _append_mean_p90(results, "SpikeScore_air", spike_scores_air)
+    _append_mean_p90(results, "AirArtifactScore", air_artifact_scores)
+    _append_mean_p90(results, "BgSensitivity", bg_sens_means)
+    _append_mean_p90(results, "BgSensitivityRatio", bg_sens_ratios)
 
     # SGF-oriented novel-view quality summary:
     # - StructureNearScore: emphasize near/mid clarity.
@@ -1209,6 +1339,7 @@ def main() -> None:
     spike_pairs = _bucket_pairs(results, "SpikeScore_air")
     bg_pairs = _bucket_pairs(results, "BgSensitivityRatio")
     bg_leak_pairs = _bucket_pairs(results, "BgLeakRatio")
+    noise_pairs = _bucket_pairs(results, "NonAirNoisePenalty")
 
     tex_near2 = _head_mean(tex_pairs, 2, float(np.mean(tex_tenengrad)) if tex_tenengrad else 0.0)
     ani_near2 = _head_mean(ani_pairs, 2, float(np.mean(edge_anisotropy)) if edge_anisotropy else 0.0)
@@ -1216,12 +1347,19 @@ def main() -> None:
     spike_far2 = _tail_mean(spike_pairs, 2, float(np.mean(spike_scores_air)) if spike_scores_air else 0.0)
     bg_far2 = _tail_mean(bg_pairs, 2, float(np.mean(bg_sens_ratios)) if bg_sens_ratios else 0.0)
     bg_leak_far2 = _tail_mean(bg_leak_pairs, 2, float(np.mean(bg_leaks)) if bg_leaks else 0.0)
-    flick_mean = float(np.mean(flickers)) if flickers else 0.0
+    noise_near2 = _head_mean(noise_pairs, 2, float(np.mean(nonair_noise_penalties)) if nonair_noise_penalties else 0.0)
+    flick_use_local = bool(getattr(args, "clean_use_local_flicker", True)) and len(flickers_local) > 0
+    flick_mean = float(flick_local_mean if flick_use_local else flick_global_mean)
 
     # Score shaping to [0,1] with fixed transforms (cross-experiment comparable on same dataset).
     s_tex = 1.0 - math.exp(-0.04 * max(0.0, tex_near2))
     s_ani = float(np.clip((ani_near2 - 0.10) / 0.45, 0.0, 1.0))
     structure_near_score = float(np.clip(0.75 * s_tex + 0.25 * s_ani, 0.0, 1.0))
+    noise_w = max(0.0, float(getattr(args, "structure_noise_penalty_w", 0.0)))
+    if noise_w > 0.0:
+        # Penalty is optional and off by default.
+        noise_factor = math.exp(-15.0 * noise_w * max(0.0, noise_near2))
+        structure_near_score = float(np.clip(structure_near_score * noise_factor, 0.0, 1.0))
 
     c_air = math.exp(-2.4 * max(0.0, air_far2))
     c_spike = math.exp(-120.0 * max(0.0, spike_far2))
@@ -1238,6 +1376,9 @@ def main() -> None:
     results["SGF_SpikeFar2_mean"] = float(spike_far2)
     results["SGF_BgLeakFar2_mean"] = float(bg_far2)
     results["SGF_BgLeakLegacyFar2_mean"] = float(bg_leak_far2)
+    results["SGF_NonAirNoiseNear2_mean"] = float(noise_near2)
+    results["SGF_CleanFlicker_source"] = "local" if flick_use_local else "global"
+    results["SGF_CleanFlicker_mean"] = float(flick_mean)
     results["SGF_StructureNearScore"] = structure_near_score
     results["SGF_CleanFarScore"] = clean_far_score
     results["SGF_NovelQualityScore"] = novel_quality_score
