@@ -996,7 +996,7 @@ def main() -> None:
     parser.add_argument("--bg", type=int, default=0, choices=[0, 1], help="Background color: 0=black, 1=white")
     parser.add_argument("--edge_thr", type=float, default=0.1, help="Sobel edge threshold for EdgeF1 (default: 0.1)")
     parser.add_argument("--edge_band_radius", type=int, default=5, help="Boundary band radius in px for halo/bg-leak metrics (default: 5)")
-    parser.add_argument("--extra_iqa", type=str, default="",
+    parser.add_argument("--extra_iqa", type=str, default="flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3",
                         help="Optional IQA set, comma-separated: flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3")
     parser.add_argument("--extra_iqa_space", type=str, default="y", choices=["y", "rgb"],
                         help="IQA input space (default: y)")

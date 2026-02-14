@@ -678,6 +678,11 @@ def main() -> None:
                     help="AlignedPSNR search window for metrics_plus.py (default: 8)")
     ap.add_argument("--metrics_plus_bg", type=int, default=0, choices=[0, 1],
                     help="Background color for metrics_plus.py (default: 0)")
+    ap.add_argument("--metrics_plus_extra_iqa", type=str,
+                    default="flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3",
+                    help="Extra IQA set for metrics_plus.py (default: enabled common set)")
+    ap.add_argument("--metrics_plus_extra_iqa_space", type=str, default="y", choices=["y", "rgb"],
+                    help="IQA input space for metrics_plus.py (default: y)")
     ap.add_argument("--run_novel_view_metrics", action="store_true", default=True,
                     help="Run novel_view_metrics.py after thermal metrics (default: on)")
     ap.add_argument("--novel_view_mode", type=str, default="grid72",
@@ -1217,6 +1222,8 @@ def main() -> None:
                 "run_metrics_plus": bool(getattr(args, "run_metrics_plus", False)),
                 "metrics_plus_K": getattr(args, "metrics_plus_K", None),
                 "metrics_plus_bg": getattr(args, "metrics_plus_bg", None),
+                "metrics_plus_extra_iqa": getattr(args, "metrics_plus_extra_iqa", None),
+                "metrics_plus_extra_iqa_space": getattr(args, "metrics_plus_extra_iqa_space", None),
                 "run_novel_view_metrics": bool(getattr(args, "run_novel_view_metrics", False)),
                 "novel_view_mode": getattr(args, "novel_view_mode", None),
                 "novel_view_N": getattr(args, "novel_view_N", None),
@@ -1696,7 +1703,10 @@ def main() -> None:
             maybe_run(metrics1_cmd, cwd=gs_root, step_name="07_metrics_rgb")
             if args.run_metrics_plus:
                 metrics_plus_cmd = [py, "metrics_plus.py", "-m", str(model_rgb),
-                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg), "--save_json"]
+                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg),
+                                    "--extra_iqa", str(args.metrics_plus_extra_iqa),
+                                    "--extra_iqa_space", str(args.metrics_plus_extra_iqa_space),
+                                    "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="07_metrics_rgb")
             _record_step("07_metrics_rgb", "run", metrics1_cmd, outputs_ok=metrics1_outputs_ok)
             # even if we can't detect output, write marker so reruns can skip
@@ -1896,7 +1906,10 @@ def main() -> None:
             maybe_run(metrics2_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_metrics_plus:
                 metrics_plus_cmd = [py, "metrics_plus.py", "-m", str(model_t),
-                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg), "--save_json"]
+                                    "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg),
+                                    "--extra_iqa", str(args.metrics_plus_extra_iqa),
+                                    "--extra_iqa_space", str(args.metrics_plus_extra_iqa_space),
+                                    "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_novel_view_metrics:
                 novel_cmd = [py, "novel_view_metrics.py", "-m", str(model_t),
