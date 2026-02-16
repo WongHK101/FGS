@@ -683,6 +683,8 @@ def main() -> None:
                     help="Extra IQA set for metrics_plus.py (default: enabled common set)")
     ap.add_argument("--metrics_plus_extra_iqa_space", type=str, default="y", choices=["y", "rgb"],
                     help="IQA input space for metrics_plus.py (default: y)")
+    ap.add_argument("--metrics_plus_extra_iqa_device", type=str, default="cuda", choices=["cpu", "cuda", "auto"],
+                    help="IQA backend device for metrics_plus.py (default: cuda)")
     ap.add_argument("--run_novel_view_metrics", action="store_true", default=True,
                     help="Run novel_view_metrics.py after thermal metrics (default: on)")
     ap.add_argument("--novel_view_mode", type=str, default="grid72",
@@ -692,6 +694,8 @@ def main() -> None:
                     help="Number of novel views for novel_view_metrics.py (used by orbit/test_offset; default: 60)")
     ap.add_argument("--novel_bg", type=int, default=0, choices=[0, 1],
                     help="Background color for novel_view_metrics.py (default: 0)")
+    ap.add_argument("--novel_view_device", type=str, default="cuda", choices=["cpu", "cuda"],
+                    help="Render device for novel_view_metrics.py (default: cuda)")
     ap.add_argument("--novel_grid_azimuth_count", type=int, default=8,
                     help="grid72 azimuth count for novel_view_metrics.py (default: 8)")
     ap.add_argument("--novel_grid_pitch_list", type=str, default="15,30,60",
@@ -1224,10 +1228,12 @@ def main() -> None:
                 "metrics_plus_bg": getattr(args, "metrics_plus_bg", None),
                 "metrics_plus_extra_iqa": getattr(args, "metrics_plus_extra_iqa", None),
                 "metrics_plus_extra_iqa_space": getattr(args, "metrics_plus_extra_iqa_space", None),
+                "metrics_plus_extra_iqa_device": getattr(args, "metrics_plus_extra_iqa_device", None),
                 "run_novel_view_metrics": bool(getattr(args, "run_novel_view_metrics", False)),
                 "novel_view_mode": getattr(args, "novel_view_mode", None),
                 "novel_view_N": getattr(args, "novel_view_N", None),
                 "novel_bg": getattr(args, "novel_bg", None),
+                "novel_view_device": getattr(args, "novel_view_device", None),
                 "novel_grid_azimuth_count": getattr(args, "novel_grid_azimuth_count", None),
                 "novel_grid_pitch_list": getattr(args, "novel_grid_pitch_list", None),
                 "novel_grid_distance_factors": getattr(args, "novel_grid_distance_factors", None),
@@ -1706,6 +1712,7 @@ def main() -> None:
                                     "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg),
                                     "--extra_iqa", str(args.metrics_plus_extra_iqa),
                                     "--extra_iqa_space", str(args.metrics_plus_extra_iqa_space),
+                                    "--extra_iqa_device", str(args.metrics_plus_extra_iqa_device),
                                     "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="07_metrics_rgb")
             _record_step("07_metrics_rgb", "run", metrics1_cmd, outputs_ok=metrics1_outputs_ok)
@@ -1909,12 +1916,14 @@ def main() -> None:
                                     "--K", str(args.metrics_plus_K), "--bg", str(args.metrics_plus_bg),
                                     "--extra_iqa", str(args.metrics_plus_extra_iqa),
                                     "--extra_iqa_space", str(args.metrics_plus_extra_iqa_space),
+                                    "--extra_iqa_device", str(args.metrics_plus_extra_iqa_device),
                                     "--save_json"]
                 maybe_run(metrics_plus_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             if args.run_novel_view_metrics:
                 novel_cmd = [py, "novel_view_metrics.py", "-m", str(model_t),
                              "--mode", str(args.novel_view_mode),
-                             "--N", str(args.novel_view_N), "--bg", str(args.novel_bg)]
+                             "--N", str(args.novel_view_N), "--bg", str(args.novel_bg),
+                             "--device", str(args.novel_view_device)]
                 if str(args.novel_view_mode) == "grid72":
                     novel_cmd.extend([
                         "--grid_azimuth_count", str(args.novel_grid_azimuth_count),

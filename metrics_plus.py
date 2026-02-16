@@ -488,18 +488,39 @@ def _normalize_extra_iqa_name(name: str) -> str:
 
 
 class _ExtraIQAEngine:
-    def __init__(self, names: List[str], channel: str):
+    def __init__(self, names: List[str], channel: str, device: str = "cuda"):
         self.names = [_normalize_extra_iqa_name(n) for n in names if str(n).strip()]
         self.channel = "rgb" if str(channel).lower() == "rgb" else "y"
+        req = str(device).strip().lower()
+        self.device_req = req if req in {"cpu", "cuda", "auto"} else "cuda"
+        self.device = "cpu"
         self.warned: set = set()
         self.pyiqa = None
         self.piq = None
+        self.torch = None
         self._pyiqa_metrics: Dict[str, Callable] = {}
         self._piq_metrics: Dict[str, Callable] = {}
         if self.names:
             self._init_backends()
 
     def _init_backends(self) -> None:
+        try:
+            import torch  # type: ignore
+            self.torch = torch
+        except Exception:
+            self.torch = None
+        cuda_ok = bool(self.torch is not None and self.torch.cuda.is_available())
+        if self.device_req == "cpu":
+            self.device = "cpu"
+        elif self.device_req == "cuda":
+            if cuda_ok:
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+                _warn_once("extra_iqa device=cuda but CUDA unavailable, fallback to cpu", self.warned)
+        else:
+            self.device = "cuda" if cuda_ok else "cpu"
+
         try:
             import pyiqa  # type: ignore
             self.pyiqa = pyiqa
@@ -518,7 +539,7 @@ class _ExtraIQAEngine:
         else:
             g = _rgb_to_gray(img)
             arr = g[None, None, ...]
-        return torch.from_numpy(arr.astype(np.float32))
+        return torch.from_numpy(arr.astype(np.float32)).to(self.device)
 
     def _create_pyiqa_metric(self, name: str):
         if self.pyiqa is None:
@@ -540,7 +561,7 @@ class _ExtraIQAEngine:
         }.get(name, [name])
         for c in candidates:
             try:
-                fn = self.pyiqa.create_metric(c, device="cpu", as_loss=False)
+                fn = self.pyiqa.create_metric(c, device=self.device, as_loss=False)
                 self._pyiqa_metrics[name] = fn
                 return fn
             except Exception:
@@ -664,6 +685,7 @@ def evaluate(
     edge_band_radius: int = 5,
     extra_iqa: str = "",
     extra_iqa_space: str = "y",
+    extra_iqa_device: str = "cuda",
 ) -> None:
     full_dict = {}
 
@@ -716,7 +738,7 @@ def evaluate(
             air_hf_mean: List[float] = []
             air_bright_excess: List[float] = []
             iqa_names = [t.strip() for t in str(extra_iqa).split(",") if t.strip()]
-            iqa_engine = _ExtraIQAEngine(iqa_names, channel=extra_iqa_space)
+            iqa_engine = _ExtraIQAEngine(iqa_names, channel=extra_iqa_space, device=extra_iqa_device)
             iqa_acc: Dict[str, List[float]] = {n: [] for n in iqa_engine.names}
 
             for _, render, gt in _iter_pairs(renders_dir, gt_dir):
@@ -1000,6 +1022,8 @@ def main() -> None:
                         help="Optional IQA set, comma-separated: flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3")
     parser.add_argument("--extra_iqa_space", type=str, default="y", choices=["y", "rgb"],
                         help="IQA input space (default: y)")
+    parser.add_argument("--extra_iqa_device", type=str, default="cuda", choices=["cpu", "cuda", "auto"],
+                        help="IQA backend device (default: cuda)")
     parser.add_argument("--save_json", action="store_true", default=False, help="Write results_plus.json (default: off)")
     args = parser.parse_args()
     evaluate(
@@ -1007,6 +1031,7 @@ def main() -> None:
         edge_band_radius=args.edge_band_radius,
         extra_iqa=args.extra_iqa,
         extra_iqa_space=args.extra_iqa_space,
+        extra_iqa_device=args.extra_iqa_device,
     )
 
 

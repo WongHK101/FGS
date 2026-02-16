@@ -267,6 +267,16 @@ def _str2bool(v: str) -> bool:
     raise argparse.ArgumentTypeError(f"invalid boolean value: {v}")
 
 
+def _resolve_torch_device(requested: str) -> torch.device:
+    req = str(requested).strip().lower()
+    if req not in ("cpu", "cuda"):
+        req = "cuda"
+    if req == "cuda" and (not torch.cuda.is_available()):
+        print("[WARN] novel_view_metrics device=cuda but CUDA unavailable, fallback to cpu")
+        req = "cpu"
+    return torch.device(req)
+
+
 def _camera_mats(cam) -> Tuple[np.ndarray, np.ndarray]:
     w2c = cam.world_view_transform.transpose(0, 1).detach().cpu().numpy()
     c2w = np.linalg.inv(w2c)
@@ -727,6 +737,7 @@ def _render_mode_orbit(
     scene: Scene,
     gaussians: GaussianModel,
     pipe,
+    device: torch.device,
     bg: int,
     n: int,
     out_dir: Path,
@@ -755,8 +766,8 @@ def _render_mode_orbit(
     znear = float(ref_cam.znear)
     zfar = float(ref_cam.zfar)
 
-    proj = getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy).transpose(0, 1).cuda()
-    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
+    proj = getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy).transpose(0, 1).to(device)
+    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device=device)
 
     _prepare_png_dir(out_dir)
     if proxy_enabled and proxy_dir is not None:
@@ -773,7 +784,7 @@ def _render_mode_orbit(
         c2w_new[:3, 3] = center + delta
         w2c_new = np.linalg.inv(c2w_new)
 
-        world_view = torch.tensor(w2c_new).transpose(0, 1).cuda()
+        world_view = torch.tensor(w2c_new, dtype=torch.float32, device=device).transpose(0, 1)
         full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
         cam = MiniCam(width, height, fovy, fovx, znear, zfar, world_view, full_proj)
 
@@ -796,6 +807,7 @@ def _render_mode_test_offset(
     scene: Scene,
     gaussians: GaussianModel,
     pipe,
+    device: torch.device,
     bg: int,
     n: int,
     out_dir: Path,
@@ -822,7 +834,7 @@ def _render_mode_test_offset(
     nn_dist = np.maximum(nn_dist, fallback)
 
     rng = np.random.default_rng(int(seed))
-    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
+    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device=device)
     _prepare_png_dir(out_dir)
     if proxy_enabled and proxy_dir is not None:
         _prepare_png_dir(proxy_dir)
@@ -862,8 +874,8 @@ def _render_mode_test_offset(
         fovx = float(src_cam.FoVx)
         znear = float(src_cam.znear)
         zfar = float(src_cam.zfar)
-        proj = getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy).transpose(0, 1).cuda()
-        world_view = torch.tensor(w2c_new, dtype=torch.float32, device="cuda").transpose(0, 1)
+        proj = getProjectionMatrix(znear=znear, zfar=zfar, fovX=fovx, fovY=fovy).transpose(0, 1).to(device)
+        world_view = torch.tensor(w2c_new, dtype=torch.float32, device=device).transpose(0, 1)
         full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
         cam = MiniCam(width, height, fovy, fovx, znear, zfar, world_view, full_proj)
 
@@ -889,7 +901,7 @@ def _render_mode_test_offset(
     return frames, meta
 
 
-def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, out_dir: Path,
+def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: torch.device, bg: int, out_dir: Path,
                         near_scale: float, far_scale: float, far_blend: float,
                         far_cover_pad: float, far_cam_mult: float,
                         azimuth_count: int, pitch_list: List[float], dist_factors: List[float], include_topdown: bool,
@@ -971,8 +983,8 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
     znear = float(ref_cam.znear)
     zfar = float(ref_cam.zfar)
     zfar_novel = max(zfar, far_anchor * 2.5, cam_d90 * 2.0)
-    proj = getProjectionMatrix(znear=znear, zfar=zfar_novel, fovX=fovx, fovY=fovy).transpose(0, 1).cuda()
-    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device="cuda")
+    proj = getProjectionMatrix(znear=znear, zfar=zfar_novel, fovX=fovx, fovY=fovy).transpose(0, 1).to(device)
+    bg_color = torch.tensor([1, 1, 1] if bg == 1 else [0, 0, 0], dtype=torch.float32, device=device)
 
     rng = np.random.default_rng(int(seed))
     _prepare_png_dir(out_dir)
@@ -1009,7 +1021,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
                     roll_flip_count += 1
                 w2c_new = np.linalg.inv(c2w_new)
 
-                world_view = torch.tensor(w2c_new, dtype=torch.float32, device="cuda").transpose(0, 1)
+                world_view = torch.tensor(w2c_new, dtype=torch.float32, device=device).transpose(0, 1)
                 full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
                 cam = MiniCam(width, height, fovy, fovx, znear, zfar_novel, world_view, full_proj)
 
@@ -1044,7 +1056,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, bg: int, o
             c2w_new = _build_c2w_from_forward_right(top_cam_pos, top_forward, top_right_hint)
             w2c_new = np.linalg.inv(c2w_new)
 
-            world_view = torch.tensor(w2c_new, dtype=torch.float32, device="cuda").transpose(0, 1)
+            world_view = torch.tensor(w2c_new, dtype=torch.float32, device=device).transpose(0, 1)
             full_proj = world_view.unsqueeze(0).bmm(proj.unsqueeze(0)).squeeze(0)
             cam = MiniCam(width, height, fovy, fovx, znear, zfar_novel, world_view, full_proj)
 
@@ -1108,6 +1120,8 @@ def main() -> None:
                         help="Novel-view generation mode (default: orbit)")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for jittered modes")
     parser.add_argument("--bg", type=int, default=0, choices=[0, 1], help="Background color: 0=black, 1=white")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"],
+                        help="Render device for novel-view evaluation (default: cuda)")
     parser.add_argument("--edge_thr", type=float, default=0.1, help="Edge threshold for spike score (default: 0.1)")
     parser.add_argument("--out_dir", type=str, default="", help="Output directory (default: <model>/novel_views)")
     # test-offset mode
@@ -1138,6 +1152,7 @@ def main() -> None:
     args = get_combined_args(parser)
 
     safe_state(False)
+    eval_device = _resolve_torch_device(getattr(args, "device", "cuda"))
 
     dataset = model.extract(args)
     pipeline = pipe.extract(args)
@@ -1164,12 +1179,12 @@ def main() -> None:
     with torch.no_grad():
         if args.mode == "orbit":
             frames, mode_meta = _render_mode_orbit(
-                scene, gaussians, pipeline, args.bg, args.N, out_dir,
+                scene, gaussians, pipeline, eval_device, args.bg, args.N, out_dir,
                 proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color
             )
         elif args.mode == "test_offset":
             frames, mode_meta = _render_mode_test_offset(
-                scene, gaussians, pipeline, args.bg, args.N, out_dir,
+                scene, gaussians, pipeline, eval_device, args.bg, args.N, out_dir,
                 shift_lat=float(args.test_shift_lat),
                 shift_up=float(args.test_shift_up),
                 lookat_blend=float(np.clip(args.test_lookat_blend, 0.0, 1.0)),
@@ -1180,7 +1195,7 @@ def main() -> None:
             grid_pitches = _parse_float_list(args.grid_pitch_list, [30.0, 60.0], clip_min=5.0, clip_max=89.9)
             grid_dist_factors = _parse_float_list(args.grid_distance_factors, [0.0, 0.5, 1.0], clip_min=0.0, clip_max=None)
             frames, mode_meta = _render_mode_grid72(
-                scene, gaussians, pipeline, args.bg, out_dir,
+                scene, gaussians, pipeline, eval_device, args.bg, out_dir,
                 near_scale=float(args.grid_near_scale),
                 far_scale=float(args.grid_far_scale),
                 far_blend=float(args.grid_far_blend),
