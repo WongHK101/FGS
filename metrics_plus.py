@@ -497,6 +497,7 @@ class _ExtraIQAEngine:
         self.warned: set = set()
         self.pyiqa = None
         self.piq = None
+        self.flip_api = None
         self.torch = None
         self._pyiqa_metrics: Dict[str, Callable] = {}
         self._piq_metrics: Dict[str, Callable] = {}
@@ -531,15 +532,38 @@ class _ExtraIQAEngine:
             self.piq = piq
         except Exception:
             self.piq = None
+        try:
+            from flip_evaluator import flip_python_api as flip_api  # type: ignore
+            self.flip_api = flip_api
+        except Exception:
+            self.flip_api = None
 
-    def _to_tensor(self, img: np.ndarray):
+    def _to_tensor(self, img: np.ndarray, force_channel: Optional[str] = None):
         import torch
-        if self.channel == "rgb":
+        ch = self.channel if force_channel is None else ("rgb" if str(force_channel).lower() == "rgb" else "y")
+        if ch == "rgb":
             arr = np.transpose(img, (2, 0, 1))[None, ...]
         else:
             g = _rgb_to_gray(img)
             arr = g[None, None, ...]
         return torch.from_numpy(arr.astype(np.float32)).to(self.device)
+
+    def _eval_flip_fallback(self, render: np.ndarray, gt: np.ndarray) -> Optional[float]:
+        if self.flip_api is None:
+            return None
+        try:
+            _, mean_err, _ = self.flip_api.evaluate(
+                gt.astype(np.float32),
+                render.astype(np.float32),
+                "LDR",
+                inputsRGB=True,
+                applyMagma=False,
+                computeMeanError=True,
+            )
+            return float(mean_err)
+        except Exception as exc:
+            _warn_once(f"extra_iqa flip_evaluator failed: {exc}", self.warned)
+            return None
 
     def _create_pyiqa_metric(self, name: str):
         if self.pyiqa is None:
@@ -623,11 +647,22 @@ class _ExtraIQAEngine:
                 fn_piq = self._create_piq_metric(n)
                 if fn_piq is not None:
                     try:
-                        val = fn_piq(x, y)
+                        x_use, y_use = x, y
+                        # PIQ FSIM expects RGB input; fallback from Y to RGB for robustness.
+                        if n == "fsim" and self.channel != "rgb":
+                            x_use = self._to_tensor(render, force_channel="rgb")
+                            y_use = self._to_tensor(gt, force_channel="rgb")
+                        val = fn_piq(x_use, y_use)
                         score = float(val.detach().cpu().reshape(-1)[0].item())
                         done = True
                     except Exception as exc:
                         _warn_once(f"extra_iqa piq '{n}' failed: {exc}", self.warned)
+
+            if (not done) and n == "flip":
+                flip_score = self._eval_flip_fallback(render, gt)
+                if flip_score is not None:
+                    score = flip_score
+                    done = True
 
             if not done:
                 _warn_once(f"extra_iqa '{n}' unavailable; writing NaN", self.warned)
