@@ -372,11 +372,6 @@ def _camera_scene_reference(cams) -> Tuple[np.ndarray, np.ndarray, np.ndarray, f
     if float(np.linalg.norm(up)) < 1e-8:
         up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
-    # Resolve normal sign: prefer the side where most cameras lie, then +Z as fallback.
-    side = float(np.median(np.dot(centered, up)))
-    if side < 0.0 or (abs(side) <= 1e-6 and up[2] < 0.0):
-        up = -up
-
     # Estimate a look-at center by least-squares intersection of camera forward rays.
     fwd = []
     for c in cams:
@@ -401,6 +396,25 @@ def _camera_scene_reference(cams) -> Tuple[np.ndarray, np.ndarray, np.ndarray, f
     t_med = float(np.median(np.einsum("ij,ij->i", (center[None, :] - centers), fwd)))
     if t_med < 0.0:
         fwd = -fwd
+
+    # Resolve plane-normal sign robustly:
+    # 1) cameras should lie mostly on +up side of the scene center;
+    # 2) camera forward rays should point mostly toward -up side (down-looking for aerial sets).
+    def _up_score(u: np.ndarray) -> Tuple[float, float, float]:
+        cam_side = float(np.median(np.dot(centers - center[None, :], u)))
+        look_side = float(np.median(np.dot(fwd, u)))
+        score = cam_side - look_side
+        return score, cam_side, look_side
+
+    s_pos, cam_pos, look_pos = _up_score(up)
+    s_neg, cam_neg, look_neg = _up_score(-up)
+    if s_neg > s_pos:
+        up = -up
+        cam_pos, look_pos = cam_neg, look_neg
+
+    # Ambiguous fallback: keep +Z preference to avoid below-ground sampling flips.
+    if abs(cam_pos) <= 1e-6 and abs(look_pos) <= 1e-6 and up[2] < 0.0:
+        up = -up
 
     cam_dist = np.linalg.norm(centers - center[None, :], axis=1)
     d50 = float(np.percentile(cam_dist, 50.0)) if cam_dist.size > 0 else 1.0
@@ -1135,8 +1149,8 @@ def main() -> None:
     parser.add_argument("--grid_far_cover_pad", type=float, default=1.08, help="Padding on FOV cover distance (default: 1.08)")
     parser.add_argument("--grid_far_cam_mult", type=float, default=2.0, help="Upper cap multiplier over camera_distance_p90 for far cover (default: 2.0)")
     parser.add_argument("--grid_azimuth_count", type=int, default=8, help="Number of azimuth directions (default: 8)")
-    parser.add_argument("--grid_pitch_list", type=str, default="30,60", help="Comma-separated pitch degrees, e.g. 30,60 (default: 30,60)")
-    parser.add_argument("--grid_distance_factors", type=str, default="0,0.5,1", help="Comma-separated factors >=0 between near and far, e.g. 0,0.5,1,1.5")
+    parser.add_argument("--grid_pitch_list", type=str, default="15,30,60", help="Comma-separated pitch degrees, e.g. 15,30,60 (default: 15,30,60)")
+    parser.add_argument("--grid_distance_factors", type=str, default="0.5,1,1.5", help="Comma-separated factors >=0 between near and far, e.g. 0.5,1,1.5")
     parser.add_argument("--grid_no_topdown", action="store_true", default=False, help="Disable final top-down frame")
     parser.add_argument("--grid_jitter", action="store_true", default=False, help="Enable small random jitter in grid72")
     parser.add_argument("--grid_pos_jitter", type=float, default=0.05, help="grid72 distance jitter ratio")
@@ -1192,8 +1206,8 @@ def main() -> None:
                 proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color,
             )
         else:
-            grid_pitches = _parse_float_list(args.grid_pitch_list, [30.0, 60.0], clip_min=5.0, clip_max=89.9)
-            grid_dist_factors = _parse_float_list(args.grid_distance_factors, [0.0, 0.5, 1.0], clip_min=0.0, clip_max=None)
+            grid_pitches = _parse_float_list(args.grid_pitch_list, [15.0, 30.0, 60.0], clip_min=5.0, clip_max=89.9)
+            grid_dist_factors = _parse_float_list(args.grid_distance_factors, [0.5, 1.0, 1.5], clip_min=0.0, clip_max=None)
             frames, mode_meta = _render_mode_grid72(
                 scene, gaussians, pipeline, eval_device, args.bg, out_dir,
                 near_scale=float(args.grid_near_scale),

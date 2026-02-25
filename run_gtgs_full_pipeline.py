@@ -757,8 +757,10 @@ def main() -> None:
     ap.add_argument("--ss_enable", action="store_true", help="Enable sparse support gating (default: off)")
     ap.add_argument("--ss_enable_rgb", action="store_true", default=False,
                     help="Enable sparse support for RGB stage only (overrides --ss_enable when set)")
-    ap.add_argument("--ss_enable_t", action="store_true", default=False,
-                    help="Enable sparse support for Thermal stage only (overrides --ss_enable when set)")
+    ap.add_argument("--ss_enable_t", action="store_true", default=True,
+                    help="Enable sparse support for Thermal stage only (overrides --ss_enable when set; default: on)")
+    ap.add_argument("--no_ss_enable_t", dest="ss_enable_t", action="store_false",
+                    help="Disable sparse support for Thermal stage.")
     ap.add_argument(
         "--ss_source",
         default="colmap_sparse",
@@ -770,8 +772,8 @@ def main() -> None:
         type=_str2bool,
         nargs="?",
         const=True,
-        default=True,
-        help="Use AABB gate before NN (default: true). Set false for NN-only gating.",
+        default=False,
+        help="Use AABB gate before NN (default: false). Set true to enable AABB+NN gating.",
     )
     ap.add_argument(
         "--ss_aabb_margin",
@@ -782,38 +784,40 @@ def main() -> None:
     ap.add_argument(
         "--ss_voxel_size",
         type=float,
-        default=None,
-        help="Voxel size for VoxelHashNN index (default: None -> AABB-only)",
+        default=1.5,
+        help="Voxel size for VoxelHashNN index (default: 1.5)",
     )
     ap.add_argument(
         "--ss_nn_dist_thr",
         type=float,
-        default=None,
-        help="Reserved NN distance threshold for gating (default: None)",
+        default=3.5,
+        help="Reserved NN distance threshold for gating (default: 3.5)",
     )
     ap.add_argument(
         "--ss_adaptive_nn",
         action="store_true",
-        default=False,
-        help="Enable adaptive NN threshold using local spacing proxy (default: off).",
+        default=True,
+        help="Enable adaptive NN threshold using local spacing proxy (default: on).",
     )
+    ap.add_argument("--no_ss_adaptive_nn", dest="ss_adaptive_nn", action="store_false",
+                    help="Disable adaptive NN threshold.")
     ap.add_argument(
         "--ss_adaptive_alpha",
         type=float,
-        default=1.0,
-        help="Adaptive NN alpha for local spacing scale (default: 1.0).",
+        default=1.2,
+        help="Adaptive NN alpha for local spacing scale (default: 1.2).",
     )
     ap.add_argument(
         "--ss_adaptive_beta",
         type=float,
-        default=0.0,
-        help="Adaptive NN beta additive margin in world units (default: 0.0).",
+        default=0.2,
+        help="Adaptive NN beta additive margin in world units (default: 0.2).",
     )
     ap.add_argument(
         "--ss_adaptive_max_scale",
         type=float,
-        default=1.5,
-        help="Adaptive NN max multiplier over base threshold (default: 1.5).",
+        default=2.0,
+        help="Adaptive NN max multiplier over base threshold (default: 2.0).",
     )
     ap.add_argument(
         "--ss_trim_tail_pct",
@@ -838,11 +842,13 @@ def main() -> None:
     ap.add_argument("--t_iter", type=int, default=40000)
     ap.add_argument("--t_res", type=int, default=1)
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
-    ap.add_argument("--t_opacity_lr", type=float, default=0.0,
-                    help="Thermal-only opacity lr (default: 0.0, keeps legacy frozen opacity)")
+    ap.add_argument("--t_opacity_lr", type=float, default=2e-4,
+                    help="Thermal-only opacity lr (default: 2e-4)")
     ap.add_argument("--t_lambda_dssim", type=float, default=0.05)
-    ap.add_argument("--ss_prune_before_thermal", action="store_true", default=False,
-                    help="Thermal-only: prune outside sparse support after restore (default: off)")
+    ap.add_argument("--ss_prune_before_thermal", action="store_true", default=True,
+                    help="Thermal-only: prune outside sparse support after restore (default: on)")
+    ap.add_argument("--no_ss_prune_before_thermal", dest="ss_prune_before_thermal", action="store_false",
+                    help="Disable thermal pre-train sparse-support prune.")
     ap.add_argument("--ss_prune_after_rgb", action="store_true", default=False,
                     help="RGB-only: prune outside sparse support once after stage-1 training (default: off)")
     ap.add_argument("--clamp_scale_max", type=float, default=None,
@@ -851,18 +857,20 @@ def main() -> None:
                     help="RGB-only: clamp max gaussian scale after densify (default: None)")
     ap.add_argument("--clamp_scale_after_rgb_final", action="store_true", default=False,
                     help="RGB-only: clamp once after stage-1 training finishes (default: off)")
-    ap.add_argument("--clamp_scale_max_t", type=float, default=None,
-                    help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
-    ap.add_argument("--thermal_reset_features", action="store_true", default=False,
-                    help="Thermal-only: reset SH features after restore/prune/clamp (default: off)")
+    ap.add_argument("--clamp_scale_max_t", type=float, default=10.0,
+                    help="Thermal-only: clamp max gaussian scale after restore/prune (default: 10.0)")
+    ap.add_argument("--thermal_reset_features", action="store_true", default=True,
+                    help="Thermal-only: reset SH features after restore/prune/clamp (default: on)")
+    ap.add_argument("--no_thermal_reset_features", dest="thermal_reset_features", action="store_false",
+                    help="Disable thermal SH feature reset.")
     ap.add_argument("--debug_gaussian_stats", action="store_true", default=False,
                     help="Thermal-only: log gaussian stats after restore/before save (default: off)")
     ap.add_argument("--sgf_disable", action="store_true", default=False,
                     help="Thermal-only: disable SGF (reapply LRs after restore) (default: off)")
 
     # Improvement 4: thermal pseudo-color structure gradient loss (default: disabled)
-    ap.add_argument("--t_struct_grad_w", type=float, default=0.0,
-                    help="Thermal pseudo-color structure gradient loss weight (0 disables; forwarded to thermal train only).")
+    ap.add_argument("--t_struct_grad_w", type=float, default=0.006,
+                    help="Thermal pseudo-color structure gradient loss weight (default: 0.006; set 0 to disable).")
     ap.add_argument("--t_struct_grad_norm", type=_str2bool, nargs="?", const=True, default=True,
                     help="Whether to normalize structure grad loss (default: True). Use --t_struct_grad_norm false to disable.")
 
