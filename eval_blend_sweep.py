@@ -1033,6 +1033,124 @@ def sample_frame_names(ref_dir: Path, k: int, seed: int) -> List[str]:
 
 
 # -----------------------------
+# Optional model-level metrics merge
+# -----------------------------
+def _numeric_kv(d: Dict[str, Any]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for k, v in d.items():
+        if isinstance(v, bool):
+            out[k] = float(v)
+            continue
+        if isinstance(v, (int, float)):
+            fv = float(v)
+            if math.isfinite(fv):
+                out[k] = fv
+    return out
+
+
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        return None
+    return None
+
+
+def _extract_results_plus_metrics(path: Path) -> Dict[str, float]:
+    """
+    Support both:
+      - {"ours_XXXX": {...metrics...}}
+      - { ...metrics... }.
+    """
+    obj = _read_json(path)
+    if obj is None:
+        return {}
+
+    # direct numeric dict
+    direct = _numeric_kv(obj)
+    if direct:
+        return direct
+
+    # nested first numeric dict
+    for v in obj.values():
+        if isinstance(v, dict):
+            nested = _numeric_kv(v)
+            if nested:
+                return nested
+    return {}
+
+
+def _extract_novel_metrics(model_dir: Path) -> Dict[str, float]:
+    candidates = [
+        model_dir / "novel_view_metrics.json",
+        model_dir / "novel_view_metrics_grid.json",
+        model_dir / "novel_views_grid" / "novel_view_metrics_grid.json",
+    ]
+    for p in candidates:
+        obj = _read_json(p)
+        if obj is not None:
+            return _numeric_kv(obj)
+    return {}
+
+
+def _load_optional_model_metrics(model_dir: Path) -> Dict[str, float]:
+    """
+    Merge selected metrics from results_plus / novel_view_metrics into one flat dict.
+    Prefixed keys avoid collisions with sweep-native metrics.
+    """
+    out: Dict[str, float] = {}
+
+    mp = _extract_results_plus_metrics(model_dir / "results_plus.json")
+    nv = _extract_novel_metrics(model_dir)
+
+    keep_mp = [
+        "SGF_MetricsPlusScore",
+        "SGF_StructureScore",
+        "SGF_CleanScore",
+        "SGF_NovelQualityScore",
+        "IQA_flip",
+        "IQA_fsim",
+        "IQA_dists",
+        "IQA_hdrvdp3",
+        "TextureLCN_TenengradRatio",
+        "AlignedEdgeF1_best",
+        "AlignedGradientCorr",
+        "BgLeakRatio",
+        "AirArtifactScore",
+    ]
+    keep_nv = [
+        "SGF_NovelQualityScore_mean",
+        "SGF_CleanFarScore_mean",
+        "TextureTenengrad_mean",
+        "BgSensitivity_mean",
+        "SpikeScore_air_mean",
+        "TemporalFlicker_local_mean",
+        "AirArtifactScore_mean",
+    ]
+
+    for k in keep_mp:
+        if k in mp:
+            out[f"mp_{k}"] = float(mp[k])
+    for k in keep_nv:
+        # Backward-compatible output key: keep *_mean column names,
+        # but accept newer novel_view_metrics keys without the *_mean suffix.
+        candidates = [k]
+        if k.endswith("_mean"):
+            candidates.append(k[:-5])
+        for ck in candidates:
+            if ck in nv:
+                out[f"nv_{k}"] = float(nv[ck])
+                break
+
+    return out
+
+
+# -----------------------------
 # Plotting
 # -----------------------------
 def _is_finite_number(x: Any) -> bool:
@@ -1471,6 +1589,34 @@ def main() -> None:
     _write_csv(out_dir / "summary_gt_ref.csv", gt_sorted)
     print("[OK] wrote:", out_dir / "summary_render_ref.csv")
     print("[OK] wrote:", out_dir / "summary_gt_ref.csv")
+
+    # merged summary for pipeline compatibility (run_gtgs_full_pipeline step14 checks this path)
+    rr_map: Dict[Tuple[str, float], Dict[str, Any]] = {}
+    gt_map: Dict[Tuple[str, float], Dict[str, Any]] = {}
+    model_map: Dict[Tuple[str, float], Dict[str, Any]] = {}
+    for r in rr_sorted:
+        rr_map[(str(r.get("strategy", "")), float(r.get("alpha", 0.0)))] = r
+    for g in gt_sorted:
+        gt_map[(str(g.get("strategy", "")), float(g.get("alpha", 0.0)))] = g
+    for m in methods:
+        key = (str(m.strategy), float(m.alpha))
+        model_map[key] = _load_optional_model_metrics(m.model_dir)
+
+    merged_rows: List[Dict[str, Any]] = []
+    for m in sorted(methods, key=lambda x: (str(x.strategy), float(x.alpha))):
+        key = (str(m.strategy), float(m.alpha))
+        row: Dict[str, Any] = {
+            "strategy": m.strategy,
+            "alpha": m.alpha,
+            "label": m.label,
+        }
+        row.update(rr_map.get(key, {}))
+        row.update(gt_map.get(key, {}))
+        row.update(model_map.get(key, {}))
+        merged_rows.append(row)
+
+    _write_csv(out_dir / "summary.csv", merged_rows)
+    print("[OK] wrote:", out_dir / "summary.csv")
 
     rr_cols = {k for row in rr_sorted for k in row.keys()}
     gt_cols = {k for row in gt_sorted for k in row.keys()}

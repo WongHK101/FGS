@@ -658,7 +658,10 @@ def main() -> None:
                     help="Auto-pick strategy when --align auto (default: legacy)")
     ap.add_argument("--auto_pick_edge_f1_eps", type=float, default=0.002,
                     help="Robust auto-pick: keep candidates within this edge_f1 margin (default: 0.002)")
-    ap.add_argument("--comparison", action="store_true", help="Enable cfr.py --comparison (writes side-by-side visuals; slower)")
+    ap.add_argument("--comparison", dest="comparison", action="store_true", default=True,
+                    help="Enable cfr.py --comparison (writes side-by-side visuals; slower) (default: on)")
+    ap.add_argument("--no_comparison", dest="comparison", action="store_false",
+                    help="Disable cfr.py --comparison (default: off)")
     ap.add_argument("--link_mode", default="copy", choices=["copy", "hardlink", "symlink"],
                     help="How to put aligned images into data_root/input (default: copy). hardlink is fastest if same disk.")
     ap.add_argument("--clean_input", action="store_true", help="Clean data_root/input before preparing it")
@@ -873,12 +876,44 @@ def main() -> None:
 
     # Eval sweep
     ap.add_argument("--auto_render", action="store_true", default=True)
+    ap.add_argument("--eval_thermal_scalar", default="hue_y", choices=["hue", "sat", "val", "hue_y"],
+                    help="Forward to eval_blend_sweep.py --thermal_scalar (default: hue_y)")
+    ap.add_argument("--eval_thermal_align", default="linear", choices=["none", "linear", "rank"],
+                    help="Forward to eval_blend_sweep.py --thermal_align (default: linear)")
+    ap.add_argument("--eval_sample_frames", type=int, default=0,
+                    help="Forward to eval_blend_sweep.py --sample_frames (default: 0=all)")
+    ap.add_argument("--eval_seed", type=int, default=0,
+                    help="Forward to eval_blend_sweep.py --seed (default: 0)")
+    ap.add_argument("--eval_no_montage", action="store_true", default=False,
+                    help="Forward to eval_blend_sweep.py --no_montage (default: off)")
+    ap.add_argument("--eval_montage_cols", type=int, default=9999,
+                    help="Forward to eval_blend_sweep.py --montage_cols (default: 9999)")
+    ap.add_argument("--eval_montage_samples", type=int, default=5,
+                    help="Forward to eval_blend_sweep.py --montage_samples (default: 5)")
+    ap.add_argument("--eval_render_iter", type=int, default=None,
+                    help="Forward to eval_blend_sweep.py --render_iter (default: None)")
+    ap.add_argument("--eval_render_source", type=str, default=None,
+                    help="Forward to eval_blend_sweep.py --render_source (default: None)")
+    ap.add_argument("--eval_render_images", type=str, default=None,
+                    help="Forward to eval_blend_sweep.py --render_images (default: None)")
+    ap.add_argument("--eval_render_resolution", type=int, default=None,
+                    help="Forward to eval_blend_sweep.py --render_resolution (default: None)")
+    ap.add_argument("--eval_render_extra", type=str, default="",
+                    help="Forward to eval_blend_sweep.py --render_extra (default: empty)")
+    ap.add_argument("--eval_gt_mode", default="link", choices=["keep", "delete", "link"],
+                    help="Forward to eval_blend_sweep.py --gt_mode (default: link)")
 
     args = ap.parse_args()
 
     # Validate step range
     if args.from_step < 1 or args.to_step > 14 or args.from_step > args.to_step:
         ap.error("--from_step/--to_step must satisfy 1 <= from_step <= to_step <= 14")
+    if args.eval_sample_frames < 0:
+        ap.error("--eval_sample_frames must be >= 0")
+    if args.eval_montage_cols <= 0:
+        ap.error("--eval_montage_cols must be > 0")
+    if args.eval_montage_samples < 0:
+        ap.error("--eval_montage_samples must be >= 0")
 
     # Validate improvement-4 params (always validated; only forwarded when enabled)
     if not math.isfinite(float(getattr(args, "t_struct_grad_w", 0.0))) or float(getattr(args, "t_struct_grad_w", 0.0)) < 0.0:
@@ -1240,6 +1275,19 @@ def main() -> None:
                 "novel_grid_no_topdown": bool(getattr(args, "novel_grid_no_topdown", False)),
                 "novel_dump_ellipsoid_proxy": bool(getattr(args, "novel_dump_ellipsoid_proxy", False)),
                 "novel_ellipsoid_proxy_dir": getattr(args, "novel_ellipsoid_proxy_dir", None),
+                "eval_thermal_scalar": getattr(args, "eval_thermal_scalar", None),
+                "eval_thermal_align": getattr(args, "eval_thermal_align", None),
+                "eval_sample_frames": getattr(args, "eval_sample_frames", None),
+                "eval_seed": getattr(args, "eval_seed", None),
+                "eval_no_montage": bool(getattr(args, "eval_no_montage", False)),
+                "eval_montage_cols": getattr(args, "eval_montage_cols", None),
+                "eval_montage_samples": getattr(args, "eval_montage_samples", None),
+                "eval_render_iter": getattr(args, "eval_render_iter", None),
+                "eval_render_source": getattr(args, "eval_render_source", None),
+                "eval_render_images": getattr(args, "eval_render_images", None),
+                "eval_render_resolution": getattr(args, "eval_render_resolution", None),
+                "eval_render_extra": getattr(args, "eval_render_extra", None),
+                "eval_gt_mode": getattr(args, "eval_gt_mode", None),
                 "dry_run": bool(getattr(args, "dry_run", False)),
             },
             "paths": {
@@ -1298,6 +1346,19 @@ def main() -> None:
                     "clamp_effective_rgb": clamp_effective_rgb,
                     "clamp_effective_t": clamp_effective_t,
                     "t_opacity_lr": getattr(args, "t_opacity_lr", None),
+                    "eval_thermal_scalar": getattr(args, "eval_thermal_scalar", None),
+                    "eval_thermal_align": getattr(args, "eval_thermal_align", None),
+                    "eval_sample_frames": getattr(args, "eval_sample_frames", None),
+                    "eval_seed": getattr(args, "eval_seed", None),
+                    "eval_no_montage": bool(getattr(args, "eval_no_montage", False)),
+                    "eval_montage_cols": getattr(args, "eval_montage_cols", None),
+                    "eval_montage_samples": getattr(args, "eval_montage_samples", None),
+                    "eval_render_iter": getattr(args, "eval_render_iter", None),
+                    "eval_render_source": getattr(args, "eval_render_source", None),
+                    "eval_render_images": getattr(args, "eval_render_images", None),
+                    "eval_render_resolution": getattr(args, "eval_render_resolution", None),
+                    "eval_render_extra": getattr(args, "eval_render_extra", None),
+                    "eval_gt_mode": getattr(args, "eval_gt_mode", None),
                 },
             },
             "steps": _json_safe(profile_steps),
@@ -2016,9 +2077,28 @@ def main() -> None:
         "--rgb_render", str(model_rgb),
         "--t_render", str(model_t),
         "--out_dir", str(eval_out),
+        "--thermal_scalar", str(args.eval_thermal_scalar),
+        "--thermal_align", str(args.eval_thermal_align),
+        "--sample_frames", str(args.eval_sample_frames),
+        "--seed", str(args.eval_seed),
+        "--montage_cols", str(args.eval_montage_cols),
+        "--montage_samples", str(args.eval_montage_samples),
+        "--gt_mode", str(args.eval_gt_mode),
     ]
     if args.auto_render:
         sweep_cmd.append("--auto_render")
+    if args.eval_no_montage:
+        sweep_cmd.append("--no_montage")
+    if args.eval_render_iter is not None:
+        sweep_cmd += ["--render_iter", str(args.eval_render_iter)]
+    if args.eval_render_source:
+        sweep_cmd += ["--render_source", str(args.eval_render_source)]
+    if args.eval_render_images:
+        sweep_cmd += ["--render_images", str(args.eval_render_images)]
+    if args.eval_render_resolution is not None:
+        sweep_cmd += ["--render_resolution", str(args.eval_render_resolution)]
+    if args.eval_render_extra:
+        sweep_cmd += ["--render_extra", str(args.eval_render_extra)]
 
     sweep_outputs_ok = (eval_out / "summary.csv").exists() and (eval_out / "summary.csv").stat().st_size > 50
     if not _in_step_range(14):
