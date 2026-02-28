@@ -37,6 +37,7 @@ import math
 import json
 import os
 import csv
+import re
 import shutil
 import subprocess
 import sys
@@ -111,6 +112,56 @@ def _ply_vertex_count(p: Path) -> Optional[int]:
     except Exception:
         return None
     return None
+
+
+def _json_number(path: Path, key: str) -> Optional[float]:
+    if (not path.exists()) or (not path.is_file()):
+        return None
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    try:
+        v = obj.get(key, None)
+        if isinstance(v, bool):
+            return float(int(v))
+        if isinstance(v, (int, float)):
+            fv = float(v)
+            return fv if math.isfinite(fv) else None
+    except Exception:
+        return None
+    return None
+
+
+def _find_prune_before_thermal_stats(log_path: Path) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    Parse one-line prune log, e.g.:
+    [INFO] SparseSupport prune_before_thermal: before=123 after=100 removed=23 keep_ratio=0.8130
+    """
+    if (not log_path.exists()) or (not log_path.is_file()):
+        return None, None, None, None
+    pat = re.compile(
+        r"SparseSupport prune_before_thermal:\s*before=(\d+)\s+after=(\d+)\s+removed=(\d+)\s+keep_ratio=([0-9]*\.?[0-9]+)"
+    )
+    last = None
+    try:
+        with log_path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                m = pat.search(line)
+                if m:
+                    last = m
+    except Exception:
+        return None, None, None, None
+    if last is None:
+        return None, None, None, None
+    try:
+        before = float(int(last.group(1)))
+        after = float(int(last.group(2)))
+        removed = float(int(last.group(3)))
+        keep = float(last.group(4))
+        return before, after, removed, keep
+    except Exception:
+        return None, None, None, None
 
 
 def _validate_finite_float(
@@ -707,10 +758,22 @@ def main() -> None:
                     help="grid72 distance factors, comma-separated (default: 0.5,1,1.5)")
     ap.add_argument("--novel_grid_no_topdown", action="store_true", default=False,
                     help="Disable top-down frame in novel_view_metrics.py grid72 mode (default: off)")
-    ap.add_argument("--novel_dump_ellipsoid_proxy", type=_str2bool, nargs="?", const=True, default=True,
-                    help="Dump same-camera ellipsoid proxy images in novel_view_metrics.py (default: on)")
+    ap.add_argument("--novel_dump_ellipsoid_proxy", type=_str2bool, nargs="?", const=True, default=False,
+                    help="Dump same-camera ellipsoid proxy images in novel_view_metrics.py (default: off)")
     ap.add_argument("--novel_ellipsoid_proxy_dir", type=str, default="",
                     help="Optional output dir for ellipsoid proxy images (default: empty -> script default)")
+    ap.add_argument("--novel_dump_sibr_ellipsoid", type=_str2bool, nargs="?", const=True, default=False,
+                    help="Dump same-camera SIBR offline ellipsoid images in novel_view_metrics.py (default: off)")
+    ap.add_argument("--novel_sibr_exe", type=str, default="",
+                    help="Optional path to SIBR_gaussianViewer_app(.exe) for SIBR ellipsoid dump")
+    ap.add_argument("--novel_sibr_out_dir", type=str, default="",
+                    help="Optional output directory for SIBR ellipsoid images")
+    ap.add_argument("--novel_sibr_device", type=int, default=0,
+                    help="CUDA device index for SIBR viewer when dumping ellipsoid images (default: 0)")
+    ap.add_argument("--novel_sibr_mode", type=str, default="ellipsoids", choices=["ellipsoids", "splats", "points"],
+                    help="SIBR gaussian mode for offline dump (default: ellipsoids)")
+    ap.add_argument("--novel_sibr_keep_path_file", action="store_true", default=False,
+                    help="Keep generated SIBR lookat path file (default: off)")
     ap.add_argument("--debug_dump", action="store_true", default=False,
                     help="Write pipeline debug JSON (default: off)")
     ap.add_argument("--debug_dump_path", type=str, default=None,
@@ -755,10 +818,12 @@ def main() -> None:
 
     # Sparse Support (Improvement 1) - forwarded to train.py only when enabled
     ap.add_argument("--ss_enable", action="store_true", help="Enable sparse support gating (default: off)")
-    ap.add_argument("--ss_enable_rgb", action="store_true", default=False,
-                    help="Enable sparse support for RGB stage only (overrides --ss_enable when set)")
-    ap.add_argument("--ss_enable_t", action="store_true", default=True,
-                    help="Enable sparse support for Thermal stage only (overrides --ss_enable when set; default: on)")
+    ap.add_argument("--ss_enable_rgb", action="store_true", default=True,
+                    help="Enable sparse support for RGB stage only (overrides --ss_enable when set; default: on)")
+    ap.add_argument("--no_ss_enable_rgb", dest="ss_enable_rgb", action="store_false",
+                    help="Disable sparse support for RGB stage.")
+    ap.add_argument("--ss_enable_t", action="store_true", default=False,
+                    help="Enable sparse support for Thermal stage only (overrides --ss_enable when set; default: off)")
     ap.add_argument("--no_ss_enable_t", dest="ss_enable_t", action="store_false",
                     help="Disable sparse support for Thermal stage.")
     ap.add_argument(
@@ -828,14 +893,14 @@ def main() -> None:
     ap.add_argument(
         "--ss_drop_small_islands",
         type=int,
-        default=0,
-        help="Drop tiny disconnected SS islands smaller than this many points (default: 0, disabled).",
+        default=2,
+        help="Drop tiny disconnected SS islands smaller than this many points (default: 2).",
     )
     ap.add_argument(
         "--ss_island_radius",
         type=float,
-        default=None,
-        help="Island grouping voxel radius (default: None -> auto).",
+        default=4.0,
+        help="Island grouping voxel radius (default: 4.0).",
     )
 
     # Stage 2 training defaults (Thermal)
@@ -845,12 +910,14 @@ def main() -> None:
     ap.add_argument("--t_opacity_lr", type=float, default=2e-4,
                     help="Thermal-only opacity lr (default: 2e-4)")
     ap.add_argument("--t_lambda_dssim", type=float, default=0.05)
-    ap.add_argument("--ss_prune_before_thermal", action="store_true", default=True,
-                    help="Thermal-only: prune outside sparse support after restore (default: on)")
+    ap.add_argument("--ss_prune_before_thermal", action="store_true", default=False,
+                    help="Thermal-only: prune outside sparse support after restore (default: off)")
     ap.add_argument("--no_ss_prune_before_thermal", dest="ss_prune_before_thermal", action="store_false",
                     help="Disable thermal pre-train sparse-support prune.")
-    ap.add_argument("--ss_prune_after_rgb", action="store_true", default=False,
-                    help="RGB-only: prune outside sparse support once after stage-1 training (default: off)")
+    ap.add_argument("--ss_prune_after_rgb", action="store_true", default=True,
+                    help="RGB-only: prune outside sparse support once after stage-1 training (default: on)")
+    ap.add_argument("--no_ss_prune_after_rgb", dest="ss_prune_after_rgb", action="store_false",
+                    help="Disable RGB post-train sparse-support prune.")
     ap.add_argument("--clamp_scale_max", type=float, default=None,
                     help="Thermal-only: clamp max gaussian scale after restore/prune (default: None)")
     ap.add_argument("--clamp_scale_max_rgb", type=float, default=None,
@@ -875,7 +942,7 @@ def main() -> None:
                     help="Whether to normalize structure grad loss (default: True). Use --t_struct_grad_norm false to disable.")
 
     # Blend defaults
-    ap.add_argument("--alphas", default="0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1")
+    ap.add_argument("--alphas", default="0,0.25,0.5,0.75,1")
     ap.add_argument("--methods", nargs="+", default=[
         "sh_only", "sh_opacity", "sh_opacity_scale", "sh_opacity_geom",
         "dc_ycc_only", "sh_opacity_dc_ycc"
@@ -969,9 +1036,14 @@ def main() -> None:
     clamp_effective_rgb = getattr(args, "clamp_scale_max_rgb", None)
     clamp_effective_t = args.clamp_scale_max_t if args.clamp_scale_max_t is not None else args.clamp_scale_max
 
-    if (not getattr(args, "sgf_disable", False)) and ss_enable_t and (not getattr(args, "ss_prune_before_thermal", False)):
-        eprint("[WARN] SGF on + ss_enable_t detected, but ss_prune_before_thermal is off. "
-               "SS gating in thermal may not take effect; consider --ss_prune_before_thermal for lightening/prune.")
+    if (
+        (not getattr(args, "sgf_disable", False))
+        and ss_enable_t
+        and (not getattr(args, "ss_prune_before_thermal", False))
+        and (not getattr(args, "ss_prune_after_rgb", False))
+    ):
+        eprint("[WARN] SGF on + ss_enable_t detected, but both ss_prune_before_thermal and ss_prune_after_rgb are off. "
+               "SS gating in thermal may not take effect; consider enabling at least one prune path.")
     # Improvement-4 forwarding args (only forwarded when enabled; safe no-op otherwise)
     tstruct_train_extra: List[str] = _build_tstruct_train_args(args)
     def _maybe_raise_file_not_found(msg: str) -> None:
@@ -1083,6 +1155,13 @@ def main() -> None:
     def _collect_artifacts(step_name: str) -> Dict[str, object]:
         rgb_ply = model_rgb / "point_cloud" / f"iteration_{args.rgb_iter}" / "point_cloud.ply"
         t_ply = model_t / "point_cloud" / f"iteration_{args.t_iter}" / "point_cloud.ply"
+        novel_dir = model_t / "novel_views"
+        novel_grid_dir = model_t / "novel_views_grid"
+        novel_grid_ellip_dir = model_t / "novel_views_grid_ellip_sibr"
+        novel_grid_json = novel_grid_dir / "novel_view_metrics_grid.json"
+        novel_legacy_json = model_t / "novel_view_metrics.json"
+        metrics_plus_rgb = model_rgb / "results_plus.json"
+        metrics_plus_t = model_t / "results_plus.json"
         paths: Dict[str, Optional[str]] = {
             "out_root": str(out_root),
             "model_rgb": str(model_rgb),
@@ -1095,9 +1174,15 @@ def main() -> None:
             "thermal_ud": str(thermal_ud),
             "render_rgb_dir": str(model_rgb / "test"),
             "render_t_dir": str(model_t / "test"),
-            "novel_views_dir": str(model_t / "novel_views"),
+            "novel_views_dir": str(novel_dir),
+            "novel_views_grid_dir": str(novel_grid_dir),
+            "novel_views_grid_ellip_sibr_dir": str(novel_grid_ellip_dir),
+            "novel_view_metrics_grid": str(novel_grid_json),
+            "novel_view_metrics_legacy": str(novel_legacy_json),
             "metrics_rgb": str(model_rgb / "results.json"),
             "metrics_t": str(model_t / "results.json"),
+            "metrics_plus_rgb": str(metrics_plus_rgb),
+            "metrics_plus_t": str(metrics_plus_t),
         }
 
         exists = {}
@@ -1120,12 +1205,55 @@ def main() -> None:
             artifacts["sizes_bytes"] = sizes
 
         if args.profile_collect_counts:
-            counts: Dict[str, Optional[int]] = {}
+            counts: Dict[str, Optional[float]] = {}
             counts["rgb_ply_vertices"] = _ply_vertex_count(rgb_ply)
             counts["t_ply_vertices"] = _ply_vertex_count(t_ply)
             counts["render_rgb_images"] = _count_images_recursive(model_rgb / "test")
             counts["render_t_images"] = _count_images_recursive(model_t / "test")
-            counts["novel_views_images"] = _count_images_recursive(model_t / "novel_views")
+            counts["novel_views_images"] = _count_images_recursive(novel_dir)
+            counts["novel_views_grid_images"] = _count_images_recursive(novel_grid_dir)
+            counts["novel_views_grid_ellip_sibr_images"] = _count_images_recursive(novel_grid_ellip_dir)
+            # Optional metric extraction (if producers already write these keys).
+            counts["gaussian_count_novel_grid"] = _json_number(novel_grid_json, "gaussian_count")
+            if counts["gaussian_count_novel_grid"] is None:
+                counts["gaussian_count_novel_grid"] = _json_number(novel_legacy_json, "gaussian_count")
+            if counts["gaussian_count_novel_grid"] is None:
+                vtx = _ply_vertex_count(t_ply)
+                counts["gaussian_count_novel_grid"] = float(vtx) if vtx is not None else None
+            counts["scale_outlier_ratio"] = _json_number(metrics_plus_t, "ScaleOutlierRatio")
+            if counts["scale_outlier_ratio"] is None:
+                counts["scale_outlier_ratio"] = _json_number(metrics_plus_t, "scale_outlier_ratio")
+            if counts["scale_outlier_ratio"] is None:
+                counts["scale_outlier_ratio"] = _json_number(novel_grid_json, "ScaleOutlierRatio")
+            if counts["scale_outlier_ratio"] is None:
+                counts["scale_outlier_ratio"] = _json_number(novel_grid_json, "scale_outlier_ratio")
+            if counts["scale_outlier_ratio"] is None:
+                counts["scale_outlier_ratio"] = _json_number(novel_legacy_json, "ScaleOutlierRatio")
+            if counts["scale_outlier_ratio"] is None:
+                counts["scale_outlier_ratio"] = _json_number(novel_legacy_json, "scale_outlier_ratio")
+            counts["opacity_low_coverage_ratio"] = _json_number(metrics_plus_t, "OpacityLowCoverageRatio")
+            if counts["opacity_low_coverage_ratio"] is None:
+                counts["opacity_low_coverage_ratio"] = _json_number(metrics_plus_t, "opacity_low_coverage_ratio")
+            if counts["opacity_low_coverage_ratio"] is None:
+                counts["opacity_low_coverage_ratio"] = _json_number(novel_grid_json, "OpacityLowCoverageRatio")
+            if counts["opacity_low_coverage_ratio"] is None:
+                counts["opacity_low_coverage_ratio"] = _json_number(novel_grid_json, "opacity_low_coverage_ratio")
+            if counts["opacity_low_coverage_ratio"] is None:
+                counts["opacity_low_coverage_ratio"] = _json_number(novel_legacy_json, "OpacityLowCoverageRatio")
+            if counts["opacity_low_coverage_ratio"] is None:
+                counts["opacity_low_coverage_ratio"] = _json_number(novel_legacy_json, "opacity_low_coverage_ratio")
+            counts["render_time_per_frame_s"] = _json_number(novel_grid_json, "RenderTimePerFrame_s")
+            if counts["render_time_per_frame_s"] is None:
+                counts["render_time_per_frame_s"] = _json_number(novel_grid_json, "render_time_per_frame_s")
+            if counts["render_time_per_frame_s"] is None:
+                counts["render_time_per_frame_s"] = _json_number(novel_legacy_json, "RenderTimePerFrame_s")
+            if counts["render_time_per_frame_s"] is None:
+                counts["render_time_per_frame_s"] = _json_number(novel_legacy_json, "render_time_per_frame_s")
+            prune_before, prune_after, prune_removed, prune_keep = _find_prune_before_thermal_stats(out_root / "log_10_train_thermal.txt")
+            counts["prune_before_thermal_before"] = prune_before
+            counts["prune_before_thermal_after"] = prune_after
+            counts["prune_before_thermal_removed"] = prune_removed
+            counts["prune_before_thermal_keep_ratio"] = prune_keep
             artifacts["counts"] = counts
 
         return artifacts
@@ -1283,6 +1411,12 @@ def main() -> None:
                 "novel_grid_no_topdown": bool(getattr(args, "novel_grid_no_topdown", False)),
                 "novel_dump_ellipsoid_proxy": bool(getattr(args, "novel_dump_ellipsoid_proxy", False)),
                 "novel_ellipsoid_proxy_dir": getattr(args, "novel_ellipsoid_proxy_dir", None),
+                "novel_dump_sibr_ellipsoid": bool(getattr(args, "novel_dump_sibr_ellipsoid", False)),
+                "novel_sibr_exe": getattr(args, "novel_sibr_exe", None),
+                "novel_sibr_out_dir": getattr(args, "novel_sibr_out_dir", None),
+                "novel_sibr_device": getattr(args, "novel_sibr_device", None),
+                "novel_sibr_mode": getattr(args, "novel_sibr_mode", None),
+                "novel_sibr_keep_path_file": bool(getattr(args, "novel_sibr_keep_path_file", False)),
                 "eval_thermal_scalar": getattr(args, "eval_thermal_scalar", None),
                 "eval_thermal_align": getattr(args, "eval_thermal_align", None),
                 "eval_sample_frames": getattr(args, "eval_sample_frames", None),
@@ -1363,6 +1497,12 @@ def main() -> None:
                     "eval_montage_samples": getattr(args, "eval_montage_samples", None),
                     "eval_render_iter": getattr(args, "eval_render_iter", None),
                     "eval_render_source": getattr(args, "eval_render_source", None),
+                    "novel_dump_sibr_ellipsoid": bool(getattr(args, "novel_dump_sibr_ellipsoid", False)),
+                    "novel_sibr_exe": getattr(args, "novel_sibr_exe", None),
+                    "novel_sibr_out_dir": getattr(args, "novel_sibr_out_dir", None),
+                    "novel_sibr_device": getattr(args, "novel_sibr_device", None),
+                    "novel_sibr_mode": getattr(args, "novel_sibr_mode", None),
+                    "novel_sibr_keep_path_file": bool(getattr(args, "novel_sibr_keep_path_file", False)),
                     "eval_render_images": getattr(args, "eval_render_images", None),
                     "eval_render_resolution": getattr(args, "eval_render_resolution", None),
                     "eval_render_extra": getattr(args, "eval_render_extra", None),
@@ -2005,6 +2145,18 @@ def main() -> None:
                     novel_cmd.append("--dump_ellipsoid_proxy")
                     if str(getattr(args, "novel_ellipsoid_proxy_dir", "")).strip():
                         novel_cmd.extend(["--ellipsoid_proxy_dir", str(args.novel_ellipsoid_proxy_dir)])
+                sibr_ellipsoid_enabled = bool(getattr(args, "novel_dump_sibr_ellipsoid", False))
+                # Always pass explicit on/off to avoid novel_view_metrics.py default overriding pipeline intent.
+                novel_cmd.extend(["--dump_sibr_ellipsoid", "true" if sibr_ellipsoid_enabled else "false"])
+                if sibr_ellipsoid_enabled:
+                    if str(getattr(args, "novel_sibr_exe", "")).strip():
+                        novel_cmd.extend(["--sibr_exe", str(args.novel_sibr_exe)])
+                    if str(getattr(args, "novel_sibr_out_dir", "")).strip():
+                        novel_cmd.extend(["--sibr_out_dir", str(args.novel_sibr_out_dir)])
+                    novel_cmd.extend(["--sibr_device", str(int(getattr(args, "novel_sibr_device", 0)))])
+                    novel_cmd.extend(["--sibr_gaussian_mode", str(getattr(args, "novel_sibr_mode", "ellipsoids"))])
+                    if bool(getattr(args, "novel_sibr_keep_path_file", False)):
+                        novel_cmd.append("--sibr_keep_path_file")
                 maybe_run(novel_cmd, cwd=gs_root, step_name="12_metrics_thermal")
             _record_step("12_metrics_thermal", "run", metrics2_cmd, outputs_ok=metrics2_outputs_ok)
             write_marker(marker_path(state_dir, "12_metrics_thermal"), "12_metrics_thermal", metrics2_cmd, cwd=gs_root)

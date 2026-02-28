@@ -1,0 +1,1114 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineSystem.cmake:211 (message)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      The system is: Windows - 10.0.15063.0 - AMD64
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -Aa 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -D__CLASSIC_C__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c;-I__does_not_exist__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -Aa 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -D__CLASSIC_C__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: CMAKE_C_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c;-I__does_not_exist__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --c++ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --ec++ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c;-I__does_not_exist__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --c++ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --ec++ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: CMAKE_CXX_COMPILER-NOTFOUND 
+      Build flags: 
+      Id flags: -c;-I__does_not_exist__ 
+      
+      The output was:
+      系统找不到指定的文件。
+      
+      
+...
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      鐢ㄤ簬 x64 鐨?Microsoft (R) C/C++ 浼樺寲缂栬瘧鍣?19.29.30159 鐗?
+      鐗堟潈鎵€鏈?C) Microsoft Corporation銆備繚鐣欐墍鏈夋潈鍒┿€?
+      
+      CMakeCCompilerId.c
+      Microsoft (R) Incremental Linker Version 14.29.30159.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
+      
+      /out:CMakeCCompilerId.exe 
+      CMakeCCompilerId.obj 
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CMakeCCompilerId.exe"
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CMakeCCompilerId.obj"
+      
+      The C compiler identification is MSVC, found in:
+        D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/3.27.9/CompilerIdC/CMakeCCompilerId.exe
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1155 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Detecting C compiler /showIncludes prefix:
+        main.c
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\ShowIncludes\\foo.h
+        
+      Found prefix "娉ㄦ剰: 鍖呭惈鏂囦欢:  "
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      鐢ㄤ簬 x64 鐨?Microsoft (R) C/C++ 浼樺寲缂栬瘧鍣?19.29.30159 鐗?
+      鐗堟潈鎵€鏈?C) Microsoft Corporation銆備繚鐣欐墍鏈夋潈鍒┿€?
+      
+      CMakeCXXCompilerId.cpp
+      Microsoft (R) Incremental Linker Version 14.29.30159.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
+      
+      /out:CMakeCXXCompilerId.exe 
+      CMakeCXXCompilerId.obj 
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CMakeCXXCompilerId.exe"
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CMakeCXXCompilerId.obj"
+      
+      The CXX compiler identification is MSVC, found in:
+        D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/3.27.9/CompilerIdCXX/CMakeCXXCompilerId.exe
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1155 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    message: |
+      Detecting CXX compiler /showIncludes prefix:
+        main.c
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\ShowIncludes\\foo.h
+        
+      Found prefix "娉ㄦ剰: 鍖呭惈鏂囦欢:  "
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:57 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-rzc64j"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-rzc64j"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-rzc64j'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_6785e
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo   -MDd /showIncludes /FoCMakeFiles\\cmTC_6785e.dir\\CMakeCCompilerABI.c.obj /FdCMakeFiles\\cmTC_6785e.dir\\ /FS -c D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCCompilerABI.c
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCompilerABI.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_6785e.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_6785e.dir\\CMakeCCompilerABI.c.obj  /out:cmTC_6785e.exe /implib:cmTC_6785e.lib /pdb:cmTC_6785e.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:57 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:13 (PROJECT)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zvktux"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zvktux"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zvktux'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_063c9
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo /TP   -MDd /showIncludes /FoCMakeFiles\\cmTC_063c9.dir\\CMakeCXXCompilerABI.cpp.obj /FdCMakeFiles\\cmTC_063c9.dir\\ /FS -c D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCXXCompilerABI.cpp
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCompilerABI.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_063c9.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_063c9.dir\\CMakeCXXCompilerABI.cpp.obj  /out:cmTC_063c9.exe /implib:cmTC_063c9.lib /pdb:cmTC_063c9.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:219 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:485 (_OPENMP_GET_FLAGS)"
+      - "cmake/windows/dependencies.cmake:195 (find_package)"
+      - "cmake/windows/include_once.cmake:20 (include)"
+      - "src/CMakeLists.txt:46 (include_once)"
+    description: "Detecting C OpenMP compiler info"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-11hp2m"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-11hp2m"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows;D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows/Modules"
+    buildResult:
+      variable: "OpenMP_COMPILE_RESULT_C_openmp"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-11hp2m'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_43fac
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo   -openmp -MDd /showIncludes /FoCMakeFiles\\cmTC_43fac.dir\\OpenMPTryFlag.c.obj /FdCMakeFiles\\cmTC_43fac.dir\\ /FS -c D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\CMakeScratch\\TryCompile-11hp2m\\OpenMPTryFlag.c
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\omp.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_43fac.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_43fac.dir\\OpenMPTryFlag.c.obj  /out:cmTC_43fac.exe /implib:cmTC_43fac.lib /pdb:cmTC_43fac.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:219 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:485 (_OPENMP_GET_FLAGS)"
+      - "cmake/windows/dependencies.cmake:195 (find_package)"
+      - "cmake/windows/include_once.cmake:20 (include)"
+      - "src/CMakeLists.txt:46 (include_once)"
+    description: "Detecting CXX OpenMP compiler info"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-v0imsm"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-v0imsm"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows;D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows/Modules"
+    buildResult:
+      variable: "OpenMP_COMPILE_RESULT_CXX_openmp"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-v0imsm'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_36470
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo /TP   -openmp -MDd /showIncludes /FoCMakeFiles\\cmTC_36470.dir\\OpenMPTryFlag.cpp.obj /FdCMakeFiles\\cmTC_36470.dir\\ /FS -c D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\CMakeScratch\\TryCompile-v0imsm\\OpenMPTryFlag.cpp
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\omp.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_36470.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_36470.dir\\OpenMPTryFlag.cpp.obj  /out:cmTC_36470.exe /implib:cmTC_36470.lib /pdb:cmTC_36470.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:419 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:559 (_OPENMP_GET_SPEC_DATE)"
+      - "cmake/windows/dependencies.cmake:195 (find_package)"
+      - "cmake/windows/include_once.cmake:20 (include)"
+      - "src/CMakeLists.txt:46 (include_once)"
+    description: "Detecting C OpenMP version"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-yjoa44"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-yjoa44"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows;D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows/Modules"
+    buildResult:
+      variable: "OpenMP_SPECTEST_C_"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-yjoa44'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_96858
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo   -openmp -MDd /showIncludes /FoCMakeFiles\\cmTC_96858.dir\\OpenMPCheckVersion.c.obj /FdCMakeFiles\\cmTC_96858.dir\\ /FS -c D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\CMakeScratch\\TryCompile-yjoa44\\OpenMPCheckVersion.c
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\stdio.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:   C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:    C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\vcruntime.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:     C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\sal.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:      C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\concurrencysal.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:     C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\vadefs.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:   C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt_wstdio.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:    C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt_stdio_config.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\omp.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_96858.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_96858.dir\\OpenMPCheckVersion.c.obj  /out:cmTC_96858.exe /implib:cmTC_96858.lib /pdb:cmTC_96858.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:419 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/FindOpenMP.cmake:559 (_OPENMP_GET_SPEC_DATE)"
+      - "cmake/windows/dependencies.cmake:195 (find_package)"
+      - "cmake/windows/include_once.cmake:20 (include)"
+      - "src/CMakeLists.txt:46 (include_once)"
+    description: "Detecting CXX OpenMP version"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zjpbxf"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zjpbxf"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows;D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows/Modules"
+    buildResult:
+      variable: "OpenMP_SPECTEST_CXX_"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-zjpbxf'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_137dc
+        [1/2] "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\cl.exe"  /nologo /TP   -openmp -MDd /showIncludes /FoCMakeFiles\\cmTC_137dc.dir\\OpenMPCheckVersion.cpp.obj /FdCMakeFiles\\cmTC_137dc.dir\\ /FS -c D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\CMakeScratch\\TryCompile-zjpbxf\\OpenMPCheckVersion.cpp
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\stdio.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:   C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:    C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\vcruntime.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:     C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\sal.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:      C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\concurrencysal.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:     C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\vadefs.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:   C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt_wstdio.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:    C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt\\corecrt_stdio_config.h
+        娉ㄦ剰: 鍖呭惈鏂囦欢:  C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include\\omp.h
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_137dc.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_137dc.dir\\OpenMPCheckVersion.cpp.obj  /out:cmTC_137dc.exe /implib:cmTC_137dc.lib /pdb:cmTC_137dc.pdb /version:0.0 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1104 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:75 (CMAKE_DETERMINE_COMPILER_ID_VENDOR)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Checking whether the CUDA compiler is NVIDIA using "" matched "nvcc: NVIDIA \\(R\\) Cuda compiler driver":
+      nvcc: NVIDIA (R) Cuda compiler driver
+      Copyright (c) 2005-2022 NVIDIA Corporation
+      Built on Wed_Sep_21_10:41:10_Pacific_Daylight_Time_2022
+      Cuda compilation tools, release 11.8, V11.8.89
+      Build cuda_11.8.r11.8/compiler.31833905_0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:53 (__determine_compiler_id_test)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:307 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Compiling the CUDA compiler identification source file "CMakeCUDACompilerId.cu" succeeded.
+      Compiler: C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/nvcc.exe 
+      Build flags: 
+      Id flags: --keep;--keep-dir;tmp -v
+      
+      The output was:
+      0
+      
+      D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA>call "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat" 
+      **********************************************************************
+      ** Visual Studio 2019 Developer Command Prompt v16.11.50
+      ** Copyright (c) 2021 Microsoft Corporation
+      **********************************************************************
+      [vcvarsall.bat] Environment initialized for: 'x64'
+      #$ C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat
+      #$ ACSetupSvcPort=23210
+      #$ ACSvcPort=17532
+      #$ AGSDESKTOPJAVA=D:\\Program Files (x86)\\ArcGIS\\Desktop10.7\\
+      #$ ALLUSERSPROFILE=C:\\ProgramData
+      #$ APPDATA=C:\\Users\\Administrator\\AppData\\Roaming
+      #$ CC=C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe
+      #$ CHROME_CRASHPAD_PIPE_NAME=\\\\.\\pipe\\crashpad_3584_DPAMDHJLUMNDDXSA
+      #$ CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_vscode
+      #$ CODEX_THREAD_ID=019c22cb-ca76-75e3-9d72-4b5a32a8c034
+      #$ CommandPromptType=Native
+      #$ CommonProgramFiles=C:\\Program Files\\Common Files
+      #$ CommonProgramFiles(x86)=C:\\Program Files (x86)\\Common Files
+      #$ CommonProgramW6432=C:\\Program Files\\Common Files
+      #$ COMPUTERNAME=SKY-20221002FGY
+      #$ ComSpec=C:\\Windows\\system32\\cmd.exe
+      #$ CONDA_DEFAULT_ENV=base
+      #$ CONDA_EXE=D:\\anaconda\\Scripts\\conda.exe
+      #$ CONDA_PREFIX=D:\\anaconda
+      #$ CONDA_PROMPT_MODIFIER=(base) 
+      #$ CONDA_PYTHON_EXE=D:\\anaconda\\python.exe
+      #$ CONDA_SHLVL=1
+      #$ CUDA_PATH=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8
+      #$ CUDA_PATH_V11_8=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8
+      #$ CXX=C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe
+      #$ DevEnvDir=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\
+      #$ DriverData=C:\\Windows\\System32\\Drivers\\DriverData
+      #$ ELECTRON_RUN_AS_NODE=1
+      #$ ENVI53_GPTOOLS=D:\\Program Files (x86)\\ENVI\\IDL85
+      #$ ExtensionSdkDir=C:\\Program Files (x86)\\Microsoft SDKs\\Windows Kits\\10\\ExtensionSDKs
+      #$ FPS_BROWSER_APP_PROFILE_STRING=Internet Explorer
+      #$ FPS_BROWSER_USER_PROFILE_STRING=Default
+      #$ Framework40Version=v4.0
+      #$ FrameworkDir=C:\\Windows\\Microsoft.NET\\Framework64\\
+      #$ FrameworkDir64=C:\\Windows\\Microsoft.NET\\Framework64\\
+      #$ FrameworkVersion=v4.0.30319
+      #$ FrameworkVersion64=v4.0.30319
+      #$ HOME=C:\\Windows\\system32\\config\\systemprofile
+      #$ HOMEDRIVE=C:
+      #$ HOMEPATH=\\Users\\Administrator
+      #$ INCLUDE=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\include;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\um;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\cppwinrt;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\include;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\um;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22621.0\\cppwinrt
+      #$ LIB=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22621.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22621.0\\um\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22621.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22621.0\\um\\x64
+      #$ LIBPATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22621.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22621.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\ATLMFC\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22621.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22621.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319
+      #$ LOCALAPPDATA=C:\\Users\\Administrator\\AppData\\Local
+      #$ LOGONSERVER=\\\\SKY-20221002FGY
+      #$ NUMBER_OF_PROCESSORS=24
+      #$ NVTOOLSEXT_PATH=C:\\Program Files\\NVIDIA Corporation\\NvToolsExt\\
+      #$ ORIGINAL_XDG_CURRENT_DESKTOP=undefined
+      #$ OS=Windows_NT
+      #$ PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja
+      #$ PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL
+      #$ Platform=x64
+      #$ PROCESSOR_ARCHITECTURE=AMD64
+      #$ PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 151 Stepping 2, GenuineIntel
+      #$ PROCESSOR_LEVEL=6
+      #$ PROCESSOR_REVISION=9702
+      #$ ProgramData=C:\\ProgramData
+      #$ ProgramFiles=C:\\Program Files
+      #$ ProgramFiles(x86)=C:\\Program Files (x86)
+      #$ ProgramW6432=C:\\Program Files
+      #$ PROMPT=$P$G
+      #$ PSModulePath=D:\\Users\\Documents\\WindowsPowerShell\\Modules;C:\\Program Files\\WindowsPowerShell\\Modules;C:\\Windows\\system32\\WindowsPowerShell\\v1.0\\Modules
+      #$ PUBLIC=C:\\Users\\Public
+      #$ RC=C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe
+      #$ RlsSvcPort=22112
+      #$ RUST_LOG=warn
+      #$ SESSIONNAME=Console
+      #$ SSL_CERT_FILE=D:\\anaconda\\Library\\ssl\\cacert.pem
+      #$ SystemDrive=C:
+      #$ SystemRoot=C:\\Windows
+      #$ UCRTVersion=10.0.22621.0
+      #$ UniversalCRTSdkDir=C:\\Program Files (x86)\\Windows Kits\\10\\
+      #$ USERDOMAIN=SKY-20221002FGY
+      #$ USERDOMAIN_ROAMINGPROFILE=SKY-20221002FGY
+      #$ USERNAME=Administrator
+      #$ USERPROFILE=C:\\Users\\Administrator
+      #$ VCIDEInstallDir=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\
+      #$ VCINSTALLDIR=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\
+      #$ VCToolsInstallDir=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\
+      #$ VCToolsRedistDir=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Redist\\MSVC\\14.29.30133\\
+      #$ VCToolsVersion=14.29.30133
+      #$ VisualStudioVersion=16.0
+      #$ VS160COMNTOOLS=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\
+      #$ VSCMD_ARG_app_plat=Desktop
+      #$ VSCMD_ARG_HOST_ARCH=x64
+      #$ VSCMD_ARG_TGT_ARCH=x64
+      #$ VSCMD_VER=16.11.50
+      #$ VSCODE_CODE_CACHE_PATH=C:\\Users\\Administrator\\AppData\\Roaming\\Code\\CachedData\\6f17636121051a53c88d3e605c491d22af2ba755
+      #$ VSCODE_CRASH_REPORTER_PROCESS_TYPE=extensionHost
+      #$ VSCODE_CWD=D:\\Microsoft VS Code
+      #$ VSCODE_ESM_ENTRYPOINT=vs/workbench/api/node/extensionHostProcess
+      #$ VSCODE_HANDLES_UNCAUGHT_ERRORS=true
+      #$ VSCODE_IPC_HOOK=\\\\.\\pipe\\c5f8be1b-1.103.2-main-sock
+      #$ VSCODE_L10N_BUNDLE_LOCATION=file:///c%3A/Users/Administrator/.vscode/extensions/ms-ceintl.vscode-language-pack-zh-hans-1.103.2025081309/translations/extensions/vscode.markdown-language-features.i18n.json
+      #$ VSCODE_NLS_CONFIG={"userLocale":"zh-cn","osLocale":"zh-cn","resolvedLanguage":"zh-cn","defaultMessagesFile":"D:\\\\Microsoft VS Code\\\\resources\\\\app\\\\out\\\\nls.messages.json","languagePack":{"translationsConfigFile":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\tcf.json","messagesFile":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\6f17636121051a53c88d3e605c491d22af2ba755\\\\nls.messages.json","corruptMarkerFile":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\corrupted.info"},"locale":"zh-cn","availableLanguages":{"*":"zh-cn"},"_languagePackId":"70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn","_languagePackSupport":true,"_translationsConfigFile":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\tcf.json","_cacheRoot":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn","_resolvedLanguagePackCoreLocation":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\6f17636121051a53c88d3e605c491d22af2ba755","_corruptedFile":"C:\\\\Users\\\\Administrator\\\\AppData\\\\Roaming\\\\Code\\\\clp\\\\70c2bb9a85ce7fd296d22cd2550aebe6.zh-cn\\\\corrupted.info"}
+      #$ VSCODE_PID=3584
+      #$ vsconsoleoutput=1
+      #$ VSINSTALLDIR=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\
+      #$ windir=C:\\Windows
+      #$ WindowsLibPath=C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22621.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22621.0
+      #$ WindowsSdkBinPath=C:\\Program Files (x86)\\Windows Kits\\10\\bin\\
+      #$ WindowsSdkDir=C:\\Program Files (x86)\\Windows Kits\\10\\
+      #$ WindowsSDKLibVersion=10.0.22621.0\\
+      #$ WindowsSdkVerBinPath=C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\
+      #$ WindowsSDKVersion=10.0.22621.0\\
+      #$ ZES_ENABLE_SYSMAN=1
+      #$ _CONDA_EXE=D:\\anaconda\\Scripts\\conda.exe
+      #$ _CONDA_ROOT=D:\\anaconda
+      #$ __CONDA_OPENSLL_CERT_FILE_SET=1
+      #$ __devinit_path=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit\\devinit.exe
+      #$ __DOTNET_ADD_64BIT=1
+      #$ __DOTNET_PREFERRED_BITNESS=64
+      #$ __VSCMD_PREINIT_PATH=D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64
+      #$ __VSCMD_PREINIT_VCToolsVersion=14.29.30133
+      #$ __VSCMD_PREINIT_VS160COMNTOOLS=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\
+      #$ __VSCMD_script_err_count=0
+      #$ PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja
+      #$ _NVVM_BRANCH_=nvvm
+      #$ _SPACE_= 
+      #$ _CUDART_=cudart
+      #$ _HERE_=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin
+      #$ _THERE_=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin
+      #$ _TARGET_SIZE_=
+      #$ _TARGET_DIR_=
+      #$ _TARGET_SIZE_=64
+      #$ _WIN_PLATFORM_=x64
+      #$ TOP=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/..
+      #$ NVVMIR_LIBRARY_DIR=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../nvvm/libdevice
+      #$ PATH=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../nvvm/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja
+      #$ INCLUDES="-IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../include"  
+      #$ LIBRARIES=  "/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"
+      #$ CUDAFE_FLAGS=
+      #$ PTXAS_FLAGS=
+      #$ erase tmp/a_dlink.reg.c
+      CMakeCUDACompilerId.cu
+      #$ cl.exe @"tmp/CMakeCUDACompilerId.cpp1.ii.res" > "tmp/CMakeCUDACompilerId.cpp1.ii" 
+      CMakeCUDACompilerId.cu
+      #$ cicc --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed  -arch compute_52 -m64 --no-version-ident -ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 --include_file_name "CMakeCUDACompilerId.fatbin.c" -tused --gen_module_id_file --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.c" --stub_file_name "tmp/CMakeCUDACompilerId.cudafe1.stub.c" --gen_device_file_name "tmp/CMakeCUDACompilerId.cudafe1.gpu"  "tmp/CMakeCUDACompilerId.cpp1.ii" -o "tmp/CMakeCUDACompilerId.ptx"
+      #$ ptxas -arch=sm_52 -m64 "tmp/CMakeCUDACompilerId.ptx"  -o "tmp/CMakeCUDACompilerId.sm_52.cubin" 
+      #$ fatbinary --create="tmp/CMakeCUDACompilerId.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " "--image3=kind=elf,sm=52,file=tmp/CMakeCUDACompilerId.sm_52.cubin" "--image3=kind=ptx,sm=52,file=tmp/CMakeCUDACompilerId.ptx" --embedded-fatbin="tmp/CMakeCUDACompilerId.fatbin.c" 
+      #$ cl.exe @"tmp/CMakeCUDACompilerId.cpp4.ii.res" > "tmp/CMakeCUDACompilerId.cpp4.ii" 
+      CMakeCUDACompilerId.cu
+      #$ cudafe++ --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed --m64 --parse_templates --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.cpp" --stub_file_name "CMakeCUDACompilerId.cudafe1.stub.c" --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" "tmp/CMakeCUDACompilerId.cpp4.ii" 
+      #$ cl.exe @"tmp/CMakeCUDACompilerId.obj.res" -Fo"tmp/CMakeCUDACompilerId.obj" 
+      CMakeCUDACompilerId.cudafe1.cpp
+      #$ nvlink -optf "tmp/a_dlink.sm_52.cubin.optf"
+      #$ fatbinary --create="tmp/a_dlink.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " -link "--image3=kind=elf,sm=52,file=tmp/a_dlink.sm_52.cubin" --embedded-fatbin="tmp/a_dlink.fatbin.c" 
+      #$ cl.exe @"tmp/a_dlink.obj.res" -Fo"tmp/a_dlink.obj" 
+      link.stub
+      #$ cl.exe @"tmp/a.exe.res" -Fe"a.exe" 
+        姝ｅ湪鍒涘缓搴?a.lib 鍜屽璞?a.exp
+      
+      
+      Compilation of the CUDA compiler identification source "CMakeCUDACompilerId.cu" produced "a.exe"
+      
+      Compilation of the CUDA compiler identification source "CMakeCUDACompilerId.cu" produced "a.exp"
+      
+      Compilation of the CUDA compiler identification source "CMakeCUDACompilerId.cu" produced "a.lib"
+      
+      The CUDA compiler identification is NVIDIA, found in:
+        D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/3.27.9/CompilerIdCUDA/a.exe
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1155 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:307 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Detecting CUDA compiler /showIncludes prefix:
+        nvcc fatal   : Don't know what to do with 'D:/c'
+        
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1155 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:307 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Detecting CUDA compiler /showIncludes prefix:
+        nvcc fatal   : Don't know what to do with 'D:/c'
+        
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:523 (message)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Parsed CUDA nvcc implicit link information:
+        found 'PATH=' string: [C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja]
+        found 'LIBRARIES=' string: ["/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"]
+        considering line: []
+        considering line: [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA>call "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat" ]
+        considering line: [**********************************************************************]
+        considering line: [** Visual Studio 2019 Developer Command Prompt v16.11.50]
+        considering line: [** Copyright (c) 2021 Microsoft Corporation]
+        considering line: [**********************************************************************]
+        considering line: [[vcvarsall.bat] Environment initialized for: 'x64']
+        considering line: [C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat]
+        considering line: [erase tmp/a_dlink.reg.c]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.cpp1.ii.res" > "tmp/CMakeCUDACompilerId.cpp1.ii" ]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cicc --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed  -arch compute_52 -m64 --no-version-ident -ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 --include_file_name "CMakeCUDACompilerId.fatbin.c" -tused --gen_module_id_file --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.c" --stub_file_name "tmp/CMakeCUDACompilerId.cudafe1.stub.c" --gen_device_file_name "tmp/CMakeCUDACompilerId.cudafe1.gpu"  "tmp/CMakeCUDACompilerId.cpp1.ii" -o "tmp/CMakeCUDACompilerId.ptx"]
+        considering line: [ptxas -arch=sm_52 -m64 "tmp/CMakeCUDACompilerId.ptx"  -o "tmp/CMakeCUDACompilerId.sm_52.cubin" ]
+        considering line: [fatbinary --create="tmp/CMakeCUDACompilerId.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " "--image3=kind=elf,sm=52,file=tmp/CMakeCUDACompilerId.sm_52.cubin" "--image3=kind=ptx,sm=52,file=tmp/CMakeCUDACompilerId.ptx" --embedded-fatbin="tmp/CMakeCUDACompilerId.fatbin.c" ]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.cpp4.ii.res" > "tmp/CMakeCUDACompilerId.cpp4.ii" ]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cudafe++ --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed --m64 --parse_templates --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.cpp" --stub_file_name "CMakeCUDACompilerId.cudafe1.stub.c" --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" "tmp/CMakeCUDACompilerId.cpp4.ii" ]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.obj.res" -Fo"tmp/CMakeCUDACompilerId.obj" ]
+        considering line: [CMakeCUDACompilerId.cudafe1.cpp]
+        considering line: [nvlink -optf "tmp/a_dlink.sm_52.cubin.optf"]
+          ignoring nvlink line
+        considering line: [fatbinary --create="tmp/a_dlink.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " -link "--image3=kind=elf,sm=52,file=tmp/a_dlink.sm_52.cubin" --embedded-fatbin="tmp/a_dlink.fatbin.c" ]
+        considering line: [cl.exe @"tmp/a_dlink.obj.res" -Fo"tmp/a_dlink.obj" ]
+        considering line: [link.stub]
+        considering line: [cl.exe @"tmp/a.exe.res" -Fe"a.exe" ]
+          extracted link line: [cl.exe -D__CUDA_ARCH_LIST__=520 -nologo "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj" "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj" -link -INCREMENTAL:NO   "/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"  cudadevrt.lib  cudart_static.lib -Fe"a.exe" ]
+        considering line: [  姝ｅ湪鍒涘缓搴?a.lib 鍜屽璞?a.exp]
+        considering line: []
+      
+        link line regex: [^( *|.*[/\\])(link\\.exe|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        link line: [cuda-fake-ld cl.exe -D__CUDA_ARCH_LIST__=520 -nologo "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj" "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj" -link -INCREMENTAL:NO   "/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"  cudadevrt.lib  cudart_static.lib -Fe"a.exe" ]
+          arg [cuda-fake-ld] ==> ignore
+          arg [cl.exe] ==> recognize MSVC cl
+          arg [-D__CUDA_ARCH_LIST__=520] ==> ignore
+          arg [-nologo] ==> ignore
+          arg [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj] ==> ignore
+          arg [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj] ==> ignore
+          arg [-link] ==> ignore MSVC cl option
+          arg [-INCREMENTAL:NO] ==> ignore
+          arg [/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64] ==> dir [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64]
+          arg [cudadevrt.lib] ==> lib [cudadevrt.lib]
+          arg [cudart_static.lib] ==> lib [cudart_static.lib]
+          arg [-Fea.exe] ==> ignore
+        collapse library dir [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64] ==> [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64]
+        implicit libs: [cudadevrt.lib;cudart_static.lib]
+        implicit objs: []
+        implicit dirs: [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64]
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCUDACompiler.cmake:579 (message)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Parsed CUDA nvcc include information:
+        found 'PATH=' string: [C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\VC\\VCPackages;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TestWindow;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\MSBuild\\Current\\bin\\Roslyn;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Team Tools\\Performance Tools;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Common\\VSPerfCollectionTools\\vs2019\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\devinit;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\\\MSBuild\\Current\\Bin;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\Tools\\;D:\\anaconda;D:\\anaconda\\Library\\mingw-w64\\bin;D:\\anaconda\\Library\\usr\\bin;D:\\anaconda\\Library\\bin;D:\\anaconda\\Scripts;D:\\anaconda\\bin;C:\\Users\\Administrator\\.codex\\tmp\\arg0\\codex-arg0f4gF55;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\colmap;C:\\Program Files\\7-Zip;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\nodejs;C:\\Users\\Administrator\\AppData\\Roaming\\npm;D:\\anaconda\\envs\\3dgs;D:\\anaconda\\envs\\3dgs\\Library\\mingw-w64\\bin;D:\\anaconda\\envs\\3dgs\\Library\\usr\\bin;D:\\anaconda\\envs\\3dgs\\Library\\bin;D:\\anaconda\\envs\\3dgs\\Scripts;D:\\anaconda\\envs\\3dgs\\bin;D:\\anaconda\\condabin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\libnvvp;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\OpenSSH;C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR;D:\\Program Files (x86)\\Git\\cmd;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2022.3.0;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;D:\\Microsoft VS Code\\bin;C:\\Program Files\\7-Zip;C:\\Users\\Administrator\\AppData\\ExifTool;C:\\Program Files\\colmap;C:\\Users\\Administrator\\AppData\\Roaming\\npm;c:\\Users\\Administrator\\.vscode\\extensions\\openai.chatgpt-0.5.76-win32-x64\\bin\\windows-x86_64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja]
+        found 'LIBRARIES=' string: ["/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"]
+        considering line: []
+        considering line: [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA>call "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat" ]
+        considering line: [**********************************************************************]
+        considering line: [** Visual Studio 2019 Developer Command Prompt v16.11.50]
+        considering line: [** Copyright (c) 2021 Microsoft Corporation]
+        considering line: [**********************************************************************]
+        considering line: [[vcvarsall.bat] Environment initialized for: 'x64']
+        considering line: [C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../../VC/Auxiliary/Build/vcvars64.bat]
+        considering line: [erase tmp/a_dlink.reg.c]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.cpp1.ii.res" > "tmp/CMakeCUDACompilerId.cpp1.ii" ]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cicc --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed  -arch compute_52 -m64 --no-version-ident -ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 --include_file_name "CMakeCUDACompilerId.fatbin.c" -tused --gen_module_id_file --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.c" --stub_file_name "tmp/CMakeCUDACompilerId.cudafe1.stub.c" --gen_device_file_name "tmp/CMakeCUDACompilerId.cudafe1.gpu"  "tmp/CMakeCUDACompilerId.cpp1.ii" -o "tmp/CMakeCUDACompilerId.ptx"]
+        considering line: [ptxas -arch=sm_52 -m64 "tmp/CMakeCUDACompilerId.ptx"  -o "tmp/CMakeCUDACompilerId.sm_52.cubin" ]
+        considering line: [fatbinary --create="tmp/CMakeCUDACompilerId.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " "--image3=kind=elf,sm=52,file=tmp/CMakeCUDACompilerId.sm_52.cubin" "--image3=kind=ptx,sm=52,file=tmp/CMakeCUDACompilerId.ptx" --embedded-fatbin="tmp/CMakeCUDACompilerId.fatbin.c" ]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.cpp4.ii.res" > "tmp/CMakeCUDACompilerId.cpp4.ii" ]
+        considering line: [CMakeCUDACompilerId.cu]
+        considering line: [cudafe++ --microsoft_version=1929 --msvc_target_version=1929 --compiler_bindir "C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/../../../../../../.." --sdk_dir "C:/Program Files (x86)/Windows Kits/10/" --display_error_number --orig_src_file_name "CMakeCUDACompilerId.cu" --orig_src_path_name "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\CMakeCUDACompilerId.cu" --allow_managed --m64 --parse_templates --gen_c_file_name "tmp/CMakeCUDACompilerId.cudafe1.cpp" --stub_file_name "CMakeCUDACompilerId.cudafe1.stub.c" --module_id_file_name "tmp/CMakeCUDACompilerId.module_id" "tmp/CMakeCUDACompilerId.cpp4.ii" ]
+        considering line: [cl.exe @"tmp/CMakeCUDACompilerId.obj.res" -Fo"tmp/CMakeCUDACompilerId.obj" ]
+        considering line: [CMakeCUDACompilerId.cudafe1.cpp]
+        considering line: [nvlink -optf "tmp/a_dlink.sm_52.cubin.optf"]
+          ignoring nvlink line
+        considering line: [fatbinary --create="tmp/a_dlink.fatbin" -64 --cicc-cmdline="-ftz=0 -prec_div=1 -prec_sqrt=1 -fmad=1 " -link "--image3=kind=elf,sm=52,file=tmp/a_dlink.sm_52.cubin" --embedded-fatbin="tmp/a_dlink.fatbin.c" ]
+        considering line: [cl.exe @"tmp/a_dlink.obj.res" -Fo"tmp/a_dlink.obj" ]
+        considering line: [link.stub]
+        considering line: [cl.exe @"tmp/a.exe.res" -Fe"a.exe" ]
+          extracted link line: [cl.exe -D__CUDA_ARCH_LIST__=520 -nologo "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj" "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj" -link -INCREMENTAL:NO   "/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"  cudadevrt.lib  cudart_static.lib -Fe"a.exe" ]
+        considering line: [  姝ｅ湪鍒涘缓搴?a.lib 鍜屽璞?a.exp]
+        considering line: []
+        found 'INCLUDES=' string: ["-IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../include"  ]
+      
+        link line regex: [^( *|.*[/\\])(link\\.exe|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        link line: [cuda-fake-ld cl.exe -D__CUDA_ARCH_LIST__=520 -nologo "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj" "D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj" -link -INCREMENTAL:NO   "/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64"  cudadevrt.lib  cudart_static.lib -Fe"a.exe" ]
+          arg [cuda-fake-ld] ==> ignore
+          arg [cl.exe] ==> recognize MSVC cl
+          arg [-D__CUDA_ARCH_LIST__=520] ==> ignore
+          arg [-nologo] ==> ignore
+          arg [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\a_dlink.obj] ==> ignore
+          arg [D:\\dataset\\FGS\\FGS-0202v1\\SIBR_viewers\\build_fgs\\CMakeFiles\\3.27.9\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.obj] ==> ignore
+          arg [-link] ==> ignore MSVC cl option
+          arg [-INCREMENTAL:NO] ==> ignore
+          arg [/LIBPATH:C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64] ==> dir [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64]
+          arg [cudadevrt.lib] ==> lib [cudadevrt.lib]
+          arg [cudart_static.lib] ==> lib [cudart_static.lib]
+          arg [-Fea.exe] ==> ignore
+        collapse library dir [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/../lib/x64] ==> [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64]
+        implicit libs: [cudadevrt.lib;cudart_static.lib]
+        implicit objs: []
+        implicit dirs: [C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64]
+        implicit fwks: []
+      
+      
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:57 (try_compile)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeTestCUDACompiler.cmake:19 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    checks:
+      - "Detecting CUDA compiler ABI info"
+    directories:
+      source: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-d61oql"
+      binary: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-d61oql"
+    cmakeVariables:
+      CMAKE_CUDA_FLAGS: "-D_WINDOWS -Xcompiler=\" /EHsc\""
+      CMAKE_CUDA_FLAGS_DEBUG: "-Xcompiler=\" -Zi -Ob0 -Od /RTC1\""
+      CMAKE_CUDA_RUNTIME_LIBRARY: "Static"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows;D:/dataset/FGS/FGS-0202v1/SIBR_viewers/cmake/windows/Modules"
+    buildResult:
+      variable: "CMAKE_CUDA_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-d61oql'
+        
+        Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_3859d
+        [1/2] "C:\\PROGRA~1\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin\\nvcc.exe" -forward-unknown-to-host-compiler   -D_WINDOWS -Xcompiler=" /EHsc"  -Xcompiler=" -Zi -Ob0 -Od /RTC1" -Xcompiler=-MDd   -Xcompiler=-v -MD -MT CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj -MF CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj.d -x cu -c D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCUDACompilerABI.cu -o CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj -Xcompiler=-FdCMakeFiles\\cmTC_3859d.dir\\,-FS
+        cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?
+        CMakeCUDACompilerABI.cu
+        cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?
+        CMakeCUDACompilerABI.cu
+        CMakeCUDACompilerABI.cu
+        cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?
+        [2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_3859d.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj  /out:cmTC_3859d.exe /implib:cmTC_3859d.lib /pdb:cmTC_3859d.pdb /version:0.0 -v /debug /INCREMENTAL  cudadevrt.lib  cudart_static.lib -LIBPATH:"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64"  && cd ."
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:127 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeTestCUDACompiler.cmake:19 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Parsed CUDA implicit include dir info: rv=start
+        warn: unable to parse implicit include dirs!
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:152 (message)"
+      - "D:/anaconda/envs/3dgs/Lib/site-packages/cmake/data/share/cmake-3.27/Modules/CMakeTestCUDACompiler.cmake:19 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "extlibs/CudaRasterizer/CudaRasterizer/CMakeLists.txt:14 (project)"
+    message: |
+      Parsed CUDA implicit link information:
+        link line regex: [^( *|.*[/\\])(link\\.exe|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        ignore line: [Change Dir: 'D:/dataset/FGS/FGS-0202v1/SIBR_viewers/build_fgs/CMakeFiles/CMakeScratch/TryCompile-d61oql']
+        ignore line: []
+        ignore line: [Run Build Command(s): D:/anaconda/envs/3dgs/Scripts/ninja.exe -v cmTC_3859d]
+        ignore line: [[1/2] "C:\\PROGRA~1\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin\\nvcc.exe" -forward-unknown-to-host-compiler   -D_WINDOWS -Xcompiler=" /EHsc"  -Xcompiler=" -Zi -Ob0 -Od /RTC1" -Xcompiler=-MDd   -Xcompiler=-v -MD -MT CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj -MF CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj.d -x cu -c D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\share\\cmake-3.27\\Modules\\CMakeCUDACompilerABI.cu -o CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj -Xcompiler=-FdCMakeFiles\\cmTC_3859d.dir\\ -FS]
+        ignore line: [cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?]
+        ignore line: [CMakeCUDACompilerABI.cu]
+        ignore line: [cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?]
+        ignore line: [CMakeCUDACompilerABI.cu]
+        ignore line: [CMakeCUDACompilerABI.cu]
+        ignore line: [cl: 鍛戒护琛?warning D9002 :蹇界暐鏈煡閫夐」鈥?v鈥?]
+        ignore line: [[2/2] cmd.exe /C "cd . && D:\\anaconda\\envs\\3dgs\\Lib\\site-packages\\cmake\\data\\bin\\cmake.exe -E vs_link_exe --intdir=CMakeFiles\\cmTC_3859d.dir --rc="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\rc.exe" --mt="C:\\PROGRA~2\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\mt.exe" --manifests  -- "C:\\PROGRA~2\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64\\link.exe" /nologo CMakeFiles\\cmTC_3859d.dir\\CMakeCUDACompilerABI.cu.obj  /out:cmTC_3859d.exe /implib:cmTC_3859d.lib /pdb:cmTC_3859d.pdb /version:0.0 -v /debug /INCREMENTAL  cudadevrt.lib  cudart_static.lib -LIBPATH:"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/lib/x64"  && cd ."]
+        ignore line: []
+        ignore line: []
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: []
+        implicit fwks: []
+      
+      
+...

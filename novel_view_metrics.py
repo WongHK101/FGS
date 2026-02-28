@@ -7,6 +7,9 @@ import argparse
 import json
 import math
 import re
+import subprocess
+import shutil
+import time
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 
@@ -634,6 +637,340 @@ def _prepare_png_dir(path: Path) -> None:
             pass
 
 
+def _find_sibr_viewer_exe(user_path: str = "") -> Optional[Path]:
+    if user_path:
+        p = Path(user_path).expanduser()
+        if p.exists():
+            return p
+    here = Path(__file__).resolve().parent
+    cands = [
+        here / "SIBR_viewers" / "install" / "bin" / "SIBR_gaussianViewer_app.exe",
+        here / "SIBR_viewers" / "install" / "bin" / "SIBR_gaussianViewer_app",
+        Path("SIBR_viewers") / "install" / "bin" / "SIBR_gaussianViewer_app.exe",
+        Path("SIBR_viewers") / "install" / "bin" / "SIBR_gaussianViewer_app",
+    ]
+    for p in cands:
+        if p.exists():
+            return p
+    return None
+
+
+_SIBR_HELP_CACHE: Dict[str, bool] = {}
+
+
+def _sibr_supports_gaussian_mode(sibr_exe: Path) -> bool:
+    key = str(sibr_exe)
+    if key in _SIBR_HELP_CACHE:
+        return _SIBR_HELP_CACHE[key]
+    try:
+        proc = subprocess.run(
+            [str(sibr_exe), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        text = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+        ok = ("gaussian-mode" in text)
+        _SIBR_HELP_CACHE[key] = bool(ok)
+        return bool(ok)
+    except Exception:
+        _SIBR_HELP_CACHE[key] = False
+        return False
+
+
+def _camera_to_lookat_line(cam: MiniCam, name: str) -> str:
+    w2c = cam.world_view_transform.transpose(0, 1).detach().cpu().numpy()
+    c2w = np.linalg.inv(w2c)
+    origin = c2w[:3, 3]
+    target = origin + c2w[:3, 2]
+    up = c2w[:3, 1]
+    fovy_deg = float(cam.FoVy) * 180.0 / math.pi
+    # SIBR path render can output blank frames when clip far is too small for large orbit radii.
+    znear = min(float(cam.znear), 0.01)
+    zfar = max(float(cam.zfar), 10000.0)
+    return (
+        f"{name} -D origin={origin[0]:.6f},{origin[1]:.6f},{origin[2]:.6f}"
+        f" -D target={target[0]:.6f},{target[1]:.6f},{target[2]:.6f}"
+        f" -D up={up[0]:.6f},{up[1]:.6f},{up[2]:.6f}"
+        f" -D fovy={fovy_deg:.6f} -D clip={znear:.6f},{zfar:.6f}\n"
+    )
+
+
+def _write_lookat_file(path: Path, lines: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for ln in lines:
+            f.write(ln)
+
+
+def _lookat_line_from_pose(
+    name: str,
+    origin: np.ndarray,
+    target: np.ndarray,
+    up: np.ndarray,
+    fovy_rad: float,
+    znear: float,
+    zfar: float,
+) -> str:
+    o = np.asarray(origin, dtype=np.float32).reshape(3)
+    t = np.asarray(target, dtype=np.float32).reshape(3)
+    u = _normalize(np.asarray(up, dtype=np.float32).reshape(3))
+    if float(np.linalg.norm(u)) < 1e-8:
+        u = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    fovy_deg = float(fovy_rad) * 180.0 / math.pi
+    return (
+        f"{name} -D origin={o[0]:.6f},{o[1]:.6f},{o[2]:.6f}"
+        f" -D target={t[0]:.6f},{t[1]:.6f},{t[2]:.6f}"
+        f" -D up={u[0]:.6f},{u[1]:.6f},{u[2]:.6f}"
+        f" -D fovy={fovy_deg:.6f} -D clip={float(znear):.6f},{float(zfar):.6f}\n"
+    )
+
+
+def _write_bundle_file(path: Path, cams: List[MiniCam]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if len(cams) <= 0:
+        path.write_text("# Bundle file v0.3\n0 0\n", encoding="utf-8")
+        return
+    with path.open("w", encoding="utf-8") as f:
+        f.write("# Bundle file v0.3\n")
+        f.write(f"{len(cams)} 0\n")
+        for cam in cams:
+            h = float(cam.image_height)
+            fovy = float(cam.FoVy)
+            focal = 0.5 * h / max(math.tan(0.5 * fovy), 1e-8)
+            w2c = cam.world_view_transform.transpose(0, 1).detach().cpu().numpy().astype(np.float64)
+            R = w2c[:3, :3]
+            t = w2c[:3, 3]
+            f.write(f"{focal:.9f} 0.0 0.0\n")
+            f.write(f"{R[0,0]:.9f} {R[0,1]:.9f} {R[0,2]:.9f}\n")
+            f.write(f"{R[1,0]:.9f} {R[1,1]:.9f} {R[1,2]:.9f}\n")
+            f.write(f"{R[2,0]:.9f} {R[2,1]:.9f} {R[2,2]:.9f}\n")
+            f.write(f"{t[0]:.9f} {t[1]:.9f} {t[2]:.9f}\n")
+
+
+def _run_sibr_offline(
+    sibr_exe: Path,
+    model_path: Path,
+    source_path: Path,
+    path_file: Path,
+    out_dir: Path,
+    width: int,
+    height: int,
+    device_id: int,
+    gaussian_mode: str,
+    iteration: Optional[int] = None,
+) -> Tuple[bool, str, bool, bool]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.png"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    supports_mode = _sibr_supports_gaussian_mode(sibr_exe)
+    mode_attempts: List[bool] = [bool(supports_mode)]
+    if supports_mode:
+        mode_attempts.append(False)
+    attempts: List[Tuple[bool, bool]] = []
+    for offscreen in [True, False]:
+        for use_mode_flag in mode_attempts:
+            attempts.append((offscreen, use_mode_flag))
+
+    last_msg = "unknown"
+    for use_offscreen, use_mode_flag in attempts:
+        cmd = [
+            str(sibr_exe),
+            "-m",
+            str(model_path),
+            "-s",
+            str(source_path),
+        ]
+        if iteration is not None and int(iteration) > 0:
+            cmd.extend(["--iteration", str(int(iteration))])
+        if use_offscreen:
+            cmd.append("--offscreen")
+        cmd.extend(
+            [
+                "--pathFile",
+                str(path_file),
+                "--outPath",
+                str(out_dir),
+            ]
+        )
+        if use_mode_flag:
+            cmd.extend(["--gaussian-mode", str(gaussian_mode)])
+        cmd.extend(
+            [
+                "--rendering-size",
+                str(int(width)),
+                str(int(height)),
+                "--force-aspect-ratio",
+                "--device",
+                str(int(device_id)),
+            ]
+        )
+        try:
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        except Exception as ex:
+            last_msg = f"spawn_error:{ex}"
+            continue
+        n_png = len(list(out_dir.glob("*.png")))
+        if proc.returncode == 0 and n_png > 0:
+            detail = "offscreen" if use_offscreen else "windowed"
+            mode_detail = "mode_arg" if use_mode_flag else "mode_default"
+            return True, f"ok_{detail}_{mode_detail}", use_mode_flag, use_offscreen
+        stderr_tail = "\n".join((proc.stderr or "").splitlines()[-6:])
+        stdout_tail = "\n".join((proc.stdout or "").splitlines()[-6:])
+        tail = stderr_tail if stderr_tail else stdout_tail
+        last_msg = f"exit={proc.returncode} png={n_png} offscreen={int(use_offscreen)} mode_arg={int(use_mode_flag)} {tail}".strip()
+
+    return False, last_msg, False, False
+
+
+def _rename_sibr_frames_to_match(sibr_dir: Path, target_names: List[str]) -> Tuple[int, int]:
+    src_files = sorted(sibr_dir.glob("*.png"))
+    n_src = len(src_files)
+    n_tgt = len(target_names)
+    if n_src <= 0 or n_tgt <= 0:
+        return n_src, n_tgt
+    # If SIBR renders an extra warm-up frame (expected), keep the latest n_tgt frames.
+    start = max(0, n_src - n_tgt)
+    src_pick = src_files[start:]
+    pick_set = {p.name for p in src_pick}
+    # Drop unpicked frames (typically warm-up black frame) so folder view stays 1:1 with novel_views_grid.
+    for src in src_files:
+        if src.name not in pick_set:
+            try:
+                src.unlink()
+            except OSError:
+                pass
+    n = min(len(src_pick), n_tgt)
+    if n <= 0:
+        return n_src, n_tgt
+    tmp_files: List[Path] = []
+    for i in range(n):
+        src = src_pick[i]
+        tmp = sibr_dir / f"__tmp_sibr_{i:06d}.png"
+        try:
+            src.rename(tmp)
+            tmp_files.append(tmp)
+        except OSError:
+            tmp_files.append(src)
+    for i in range(n):
+        dst = sibr_dir / target_names[i]
+        try:
+            if dst.exists():
+                dst.unlink()
+            tmp_files[i].rename(dst)
+        except OSError:
+            pass
+    keep_names = set(target_names[:n])
+    for leftover in sibr_dir.glob("*.png"):
+        if leftover.name not in keep_names:
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+    return n_src, n_tgt
+
+
+def _invert_lookat_forward(lines: List[str]) -> List[str]:
+    out: List[str] = []
+    pat = re.compile(
+        r"^(?P<prefix>.*?-D origin=)(?P<ox>[-+0-9.eE]+),(?P<oy>[-+0-9.eE]+),(?P<oz>[-+0-9.eE]+)"
+        r"(?P<m1>.*?-D target=)(?P<tx>[-+0-9.eE]+),(?P<ty>[-+0-9.eE]+),(?P<tz>[-+0-9.eE]+)(?P<suffix>.*)$"
+    )
+    for ln in lines:
+        m = pat.match(ln.rstrip("\n"))
+        if not m:
+            out.append(ln)
+            continue
+        ox = float(m.group("ox"))
+        oy = float(m.group("oy"))
+        oz = float(m.group("oz"))
+        tx = float(m.group("tx"))
+        ty = float(m.group("ty"))
+        tz = float(m.group("tz"))
+        ntx = 2.0 * ox - tx
+        nty = 2.0 * oy - ty
+        ntz = 2.0 * oz - tz
+        rebuilt = (
+            f"{m.group('prefix')}{ox:.6f},{oy:.6f},{oz:.6f}"
+            f"{m.group('m1')}{ntx:.6f},{nty:.6f},{ntz:.6f}{m.group('suffix')}\n"
+        )
+        out.append(rebuilt)
+    return out
+
+
+def _image_transform(img: np.ndarray, tag: str) -> np.ndarray:
+    if tag == "vflip":
+        return img[::-1, :, :]
+    if tag == "hflip":
+        return img[:, ::-1, :]
+    if tag == "vhflip":
+        return img[::-1, ::-1, :]
+    return img
+
+
+def _score_sibr_alignment(
+    ref_dir: Path,
+    sibr_dir: Path,
+    names: List[str],
+    transform_tag: str,
+    max_samples: int = 12,
+) -> float:
+    if not names:
+        return float("inf")
+    if max_samples <= 0:
+        max_samples = 12
+    idxs = np.linspace(0, len(names) - 1, num=min(max_samples, len(names)))
+    idxs = np.unique(np.round(idxs).astype(np.int32)).tolist()
+    errs: List[float] = []
+    valid_ratios: List[float] = []
+    for i in idxs:
+        nm = names[int(i)]
+        rp = ref_dir / nm
+        sp = sibr_dir / nm
+        if (not rp.exists()) or (not sp.exists()):
+            continue
+        try:
+            ra = np.asarray(Image.open(rp).convert("RGB"), dtype=np.float32) / 255.0
+            sa = np.asarray(Image.open(sp).convert("RGB"), dtype=np.float32) / 255.0
+        except Exception:
+            continue
+        sa = _image_transform(sa, transform_tag)
+        valid_ratios.append(float(np.mean(np.max(sa, axis=2) > 0.03)))
+        rg = _rgb_to_gray(ra)
+        sg = _rgb_to_gray(sa)
+        rg = (rg - float(np.mean(rg))) / (float(np.std(rg)) + 1e-6)
+        sg = (sg - float(np.mean(sg))) / (float(np.std(sg)) + 1e-6)
+        errs.append(float(np.mean((rg - sg) ** 2)))
+    if not errs:
+        return float("inf")
+    valid_mean = float(np.mean(valid_ratios)) if valid_ratios else 0.0
+    valid_frame_ratio = float(np.mean(np.asarray(valid_ratios, dtype=np.float32) > 0.05)) if valid_ratios else 0.0
+    # Reject degenerate candidates (mostly black/empty outputs).
+    if valid_mean < 0.20 or valid_frame_ratio < 0.70:
+        return float("inf")
+    # Mild penalty for low visible coverage.
+    cov_penalty = 0.25 * max(0.0, 0.20 - valid_mean)
+    return float(np.mean(errs) + cov_penalty)
+
+
+def _apply_sibr_transform_inplace(sibr_dir: Path, transform_tag: str) -> None:
+    if transform_tag == "none":
+        return
+    for fp in sibr_dir.glob("*.png"):
+        try:
+            with Image.open(fp) as im:
+                arr = np.asarray(im.convert("RGB"), dtype=np.uint8)
+            arr = (_image_transform(arr, transform_tag)).astype(np.uint8)
+            Image.fromarray(arr).save(fp)
+        except Exception:
+            continue
+
+
 def _qnorm_torch(x: torch.Tensor, qlo: float = 0.02, qhi: float = 0.98, eps: float = 1e-8) -> torch.Tensor:
     if x.numel() == 0:
         return x
@@ -676,12 +1013,17 @@ def _render_save_pair(
     bg_sens_means: Optional[List[float]] = None,
     bg_sens_ratios: Optional[List[float]] = None,
     bg_sens_thr: float = 8.0 / 255.0,
+    sibr_lookat_lines: Optional[List[str]] = None,
+    sibr_cam_name: Optional[str] = None,
 ) -> None:
     render_out = render(cam, gaussians, pipe, bg_color, use_trained_exp=False)
     img = render_out["render"].detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
     frames.append(img)
     img_u8 = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
     Image.fromarray(img_u8).save(out_dir / file_name)
+    if sibr_lookat_lines is not None:
+        cam_name = str(sibr_cam_name) if sibr_cam_name else Path(file_name).stem
+        sibr_lookat_lines.append(_camera_to_lookat_line(cam, cam_name))
 
     if bg_sens_means is not None and bg_sens_ratios is not None:
         if int(bg_mode) == 0:
@@ -758,7 +1100,7 @@ def _render_mode_orbit(
     proxy_enabled: bool = False,
     proxy_dir: Optional[Path] = None,
     proxy_override_color: Optional[torch.Tensor] = None,
-) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+) -> Tuple[List[np.ndarray], Dict[str, Any], List[str]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive a novel path.")
@@ -787,6 +1129,7 @@ def _render_mode_orbit(
     if proxy_enabled and proxy_dir is not None:
         _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    sibr_lines: List[str] = []
     bg_sens_means: List[float] = []
     bg_sens_ratios: List[float] = []
 
@@ -805,7 +1148,8 @@ def _render_mode_orbit(
         _render_save_pair(
             cam, gaussians, pipe, bg_color, out_dir, f"{i:04d}.png", frames,
             proxy_enabled, proxy_dir, proxy_override_color, int(bg),
-            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios,
+            sibr_lookat_lines=sibr_lines, sibr_cam_name=f"{i:04d}"
         )
 
     return frames, {
@@ -814,7 +1158,7 @@ def _render_mode_orbit(
         "bg_sensitivity_thr": float(8.0 / 255.0),
         "bg_sensitivity_means": bg_sens_means,
         "bg_sensitivity_ratios": bg_sens_ratios,
-    }
+    }, sibr_lines
 
 
 def _render_mode_test_offset(
@@ -832,7 +1176,7 @@ def _render_mode_test_offset(
     proxy_enabled: bool = False,
     proxy_dir: Optional[Path] = None,
     proxy_override_color: Optional[torch.Tensor] = None,
-) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+) -> Tuple[List[np.ndarray], Dict[str, Any], List[str]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive test-offset path.")
@@ -853,6 +1197,7 @@ def _render_mode_test_offset(
     if proxy_enabled and proxy_dir is not None:
         _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    sibr_lines: List[str] = []
     bg_sens_means: List[float] = []
     bg_sens_ratios: List[float] = []
 
@@ -896,7 +1241,8 @@ def _render_mode_test_offset(
         _render_save_pair(
             cam, gaussians, pipe, bg_color, out_dir, f"{i:04d}.png", frames,
             proxy_enabled, proxy_dir, proxy_override_color, int(bg),
-            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+            bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios,
+            sibr_lookat_lines=sibr_lines, sibr_cam_name=f"{i:04d}"
         )
 
     meta = {
@@ -912,7 +1258,7 @@ def _render_mode_test_offset(
         "bg_sensitivity_means": bg_sens_means,
         "bg_sensitivity_ratios": bg_sens_ratios,
     }
-    return frames, meta
+    return frames, meta, sibr_lines
 
 
 def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: torch.device, bg: int, out_dir: Path,
@@ -921,7 +1267,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
                         azimuth_count: int, pitch_list: List[float], dist_factors: List[float], include_topdown: bool,
                         jitter: bool, pos_jitter: float, ang_jitter_deg: float, seed: int,
                         proxy_enabled: bool = False, proxy_dir: Optional[Path] = None,
-                        proxy_override_color: Optional[torch.Tensor] = None) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+                        proxy_override_color: Optional[torch.Tensor] = None) -> Tuple[List[np.ndarray], Dict[str, Any], List[str]]:
     cams = scene.getTestCameras() or scene.getTrainCameras()
     if not cams:
         raise RuntimeError("No cameras found to derive grid72 path.")
@@ -1005,6 +1351,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
     if proxy_enabled and proxy_dir is not None:
         _prepare_png_dir(proxy_dir)
     frames: List[np.ndarray] = []
+    sibr_lines: List[str] = []
     bg_sens_means: List[float] = []
     bg_sens_ratios: List[float] = []
     idx = 0
@@ -1050,7 +1397,8 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
                 _render_save_pair(
                     cam, gaussians, pipe, bg_color, out_dir, file_name, frames,
                     proxy_enabled, proxy_dir, proxy_override_color, int(bg),
-                    bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+                    bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios,
+                    sibr_lookat_lines=sibr_lines, sibr_cam_name=Path(file_name).stem,
                 )
                 idx += 1
 
@@ -1078,7 +1426,8 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
             _render_save_pair(
                 cam, gaussians, pipe, bg_color, out_dir, file_name, frames,
                 proxy_enabled, proxy_dir, proxy_override_color, int(bg),
-                bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios
+                bg_sens_means=bg_sens_means, bg_sens_ratios=bg_sens_ratios,
+                sibr_lookat_lines=sibr_lines, sibr_cam_name=Path(file_name).stem,
             )
             idx += 1
 
@@ -1121,7 +1470,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
         "bg_sensitivity_means": bg_sens_means,
         "bg_sensitivity_ratios": bg_sens_ratios,
     }
-    return frames, meta
+    return frames, meta, sibr_lines
 
 
 def main() -> None:
@@ -1163,6 +1512,19 @@ def main() -> None:
                         help="Dump per-view ellipsoid proxy images with exact same camera poses (default: off)")
     parser.add_argument("--ellipsoid_proxy_dir", type=str, default="",
                         help="Output directory for ellipsoid proxy images (default: <out_dir>_ellip)")
+    parser.add_argument("--dump_sibr_ellipsoid", type=_str2bool, nargs="?", const=True, default=True,
+                        help="Dump SIBR offline ellipsoid renders with the exact same camera path (default: on)")
+    parser.add_argument("--sibr_exe", type=str, default="",
+                        help="Path to SIBR_gaussianViewer_app(.exe); auto-detected when empty")
+    parser.add_argument("--sibr_out_dir", type=str, default="",
+                        help="Output dir for SIBR ellipsoid renders (default: <out_dir>_ellip_sibr)")
+    parser.add_argument("--sibr_device", type=int, default=0,
+                        help="CUDA device index for SIBR viewer (default: 0)")
+    parser.add_argument("--sibr_gaussian_mode", type=str, default="ellipsoids",
+                        choices=["ellipsoids", "splats", "points"],
+                        help="SIBR gaussian render mode for offline dump (default: ellipsoids)")
+    parser.add_argument("--sibr_keep_path_file", action="store_true", default=False,
+                        help="Keep generated .lookat path file after SIBR render (default: off)")
     args = get_combined_args(parser)
 
     safe_state(False)
@@ -1183,21 +1545,43 @@ def main() -> None:
 
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, load_iteration=args.iteration, shuffle=False)
+    gaussian_count = int(gaussians.get_xyz.shape[0]) if gaussians.get_xyz is not None else 0
+    scale_outlier_ratio = 0.0
+    scale_outlier_ratio_s20 = 0.0
+    opacity_low_cov_ratio = 0.0
+    opacity_low_cov_ratio_o01 = 0.0
+    with torch.no_grad():
+        try:
+            if gaussians.get_scaling is not None and gaussians.get_scaling.numel() > 0:
+                smax = torch.max(gaussians.get_scaling, dim=1).values
+                scale_outlier_ratio = float(torch.mean((smax > 10.0).float()).item())
+                scale_outlier_ratio_s20 = float(torch.mean((smax > 20.0).float()).item())
+        except Exception:
+            pass
+        try:
+            if gaussians.get_opacity is not None and gaussians.get_opacity.numel() > 0:
+                op = gaussians.get_opacity.view(-1)
+                opacity_low_cov_ratio = float(torch.mean((op < 0.05).float()).item())
+                opacity_low_cov_ratio_o01 = float(torch.mean((op < 0.10).float()).item())
+        except Exception:
+            pass
     proxy_enabled = bool(args.dump_ellipsoid_proxy)
     if args.ellipsoid_proxy_dir:
         proxy_out_dir = Path(args.ellipsoid_proxy_dir)
     else:
         proxy_out_dir = out_dir.parent / f"{out_dir.name}_ellip"
     proxy_override_color = _build_ellipsoid_proxy_override_color(gaussians) if proxy_enabled else None
+    sibr_lines: List[str] = []
 
+    render_t0 = time.perf_counter()
     with torch.no_grad():
         if args.mode == "orbit":
-            frames, mode_meta = _render_mode_orbit(
+            frames, mode_meta, sibr_lines = _render_mode_orbit(
                 scene, gaussians, pipeline, eval_device, args.bg, args.N, out_dir,
                 proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color
             )
         elif args.mode == "test_offset":
-            frames, mode_meta = _render_mode_test_offset(
+            frames, mode_meta, sibr_lines = _render_mode_test_offset(
                 scene, gaussians, pipeline, eval_device, args.bg, args.N, out_dir,
                 shift_lat=float(args.test_shift_lat),
                 shift_up=float(args.test_shift_up),
@@ -1208,7 +1592,7 @@ def main() -> None:
         else:
             grid_pitches = _parse_float_list(args.grid_pitch_list, [15.0, 30.0, 60.0], clip_min=5.0, clip_max=89.9)
             grid_dist_factors = _parse_float_list(args.grid_distance_factors, [0.5, 1.0, 1.5], clip_min=0.0, clip_max=None)
-            frames, mode_meta = _render_mode_grid72(
+            frames, mode_meta, sibr_lines = _render_mode_grid72(
                 scene, gaussians, pipeline, eval_device, args.bg, out_dir,
                 near_scale=float(args.grid_near_scale),
                 far_scale=float(args.grid_far_scale),
@@ -1225,9 +1609,101 @@ def main() -> None:
                 seed=int(args.seed),
                 proxy_enabled=proxy_enabled, proxy_dir=proxy_out_dir, proxy_override_color=proxy_override_color,
             )
+    render_total_s = float(max(0.0, time.perf_counter() - render_t0))
+    render_per_frame_s = float(render_total_s / max(1, len(frames)))
 
     frame_tags = _collect_frame_tags(out_dir, len(frames))
     frame_names = _collect_frame_names(out_dir, len(frames))
+    sibr_enabled = bool(getattr(args, "dump_sibr_ellipsoid", False))
+    sibr_status = "disabled"
+    sibr_out_dir = Path(args.sibr_out_dir) if str(getattr(args, "sibr_out_dir", "")).strip() else (out_dir.parent / f"{out_dir.name}_ellip_sibr")
+    sibr_frame_src = 0
+    if sibr_enabled:
+        if len(sibr_lines) == 0:
+            sibr_status = "skipped_no_cameras"
+        else:
+            sibr_exe = _find_sibr_viewer_exe(str(getattr(args, "sibr_exe", "")))
+            if sibr_exe is None:
+                sibr_status = "skipped_no_sibr_exe"
+                print("[WARN] dump_sibr_ellipsoid=True but SIBR_gaussianViewer_app not found; skipped.")
+            else:
+                src_path = Path(str(getattr(dataset, "source_path", getattr(args, "source_path", ""))))
+                h = int(frames[0].shape[0]) if frames else 0
+                w = int(frames[0].shape[1]) if frames else 0
+                iter_loaded = int(scene.loaded_iter) if getattr(scene, "loaded_iter", None) is not None else None
+                path_file = out_dir / "_novel_views_grid.lookat"
+                cand_root = out_dir / "_sibr_cands"
+                if cand_root.exists():
+                    shutil.rmtree(cand_root, ignore_errors=True)
+                cand_root.mkdir(parents=True, exist_ok=True)
+                candidates = [
+                    ("fwd_pos", list(sibr_lines)),
+                    ("fwd_neg", _invert_lookat_forward(sibr_lines)),
+                ]
+                best: Optional[Dict[str, Any]] = None
+                best_err = float("inf")
+                best_msg = "no_valid_candidate"
+                for cand_name, cand_lines in candidates:
+                    cand_path = cand_root / f"_novel_views_grid_{cand_name}.lookat"
+                    cand_out = cand_root / cand_name
+                    cand_out.mkdir(parents=True, exist_ok=True)
+                    sibr_lines_warmup = [cand_lines[0]] + list(cand_lines)
+                    _write_lookat_file(cand_path, sibr_lines_warmup)
+                    ok, msg, used_mode_arg, used_offscreen = _run_sibr_offline(
+                        sibr_exe=sibr_exe,
+                        model_path=Path(str(args.model_path)),
+                        source_path=src_path,
+                        path_file=cand_path,
+                        out_dir=cand_out,
+                        width=w,
+                        height=h,
+                        device_id=int(getattr(args, "sibr_device", 0)),
+                        gaussian_mode=str(getattr(args, "sibr_gaussian_mode", "ellipsoids")),
+                        iteration=iter_loaded,
+                    )
+                    if not ok:
+                        best_msg = msg
+                        continue
+                    src_cnt, tgt_cnt = _rename_sibr_frames_to_match(cand_out, frame_names)
+                    transforms = ["none", "vflip", "hflip", "vhflip"]
+                    trans_scores = {t: _score_sibr_alignment(out_dir, cand_out, frame_names, t) for t in transforms}
+                    trans_best = min(trans_scores, key=trans_scores.get)
+                    err = float(trans_scores[trans_best])
+                    if err < best_err:
+                        best_err = err
+                        best = {
+                            "cand_name": cand_name,
+                            "cand_out": cand_out,
+                            "src_cnt": int(src_cnt),
+                            "tgt_cnt": int(tgt_cnt),
+                            "transform": str(trans_best),
+                            "used_mode_arg": bool(used_mode_arg),
+                            "used_offscreen": bool(used_offscreen),
+                            "err": float(err),
+                        }
+                if best is None:
+                    sibr_status = f"failed_{best_msg}"
+                    print(f"[WARN] SIBR ellipsoid dump failed: {best_msg}")
+                else:
+                    if sibr_out_dir.exists():
+                        shutil.rmtree(sibr_out_dir, ignore_errors=True)
+                    shutil.copytree(best["cand_out"], sibr_out_dir)
+                    _apply_sibr_transform_inplace(sibr_out_dir, best["transform"])
+                    kept_cnt = len(list(sibr_out_dir.glob("*.png")))
+                    sibr_frame_src = int(best["src_cnt"])
+                    mode_tag = "mode_arg" if best["used_mode_arg"] else "mode_default"
+                    offscreen_tag = "offscreen" if best["used_offscreen"] else "windowed"
+                    ori_tag = f"{best['cand_name']}_{best['transform']}"
+                    base = f"ok_{offscreen_tag}_{mode_tag}_{ori_tag}_e{best['err']:.4f}"
+                    sibr_status = base if kept_cnt == int(best["tgt_cnt"]) else f"{base}_count_mismatch_src{best['src_cnt']}_kept{kept_cnt}_tgt{best['tgt_cnt']}"
+                if not bool(getattr(args, "sibr_keep_path_file", False)):
+                    try:
+                        for p in cand_root.glob("*.lookat"):
+                            p.unlink()
+                        if path_file.exists():
+                            path_file.unlink()
+                    except OSError:
+                        pass
     bg_leaks: List[float] = []
     spike_scores_all: List[float] = []
     spike_scores_air: List[float] = []
@@ -1287,6 +1763,16 @@ def main() -> None:
     results = {
         "mode": str(args.mode),
         "num_frames": int(len(frames)),
+        "gaussian_count": int(gaussian_count),
+        "ScaleOutlierRatio": float(scale_outlier_ratio),
+        "ScaleOutlierRatio_s20": float(scale_outlier_ratio_s20),
+        "OpacityLowCoverageRatio": float(opacity_low_cov_ratio),
+        "OpacityLowCoverageRatio_o10": float(opacity_low_cov_ratio_o01),
+        "RenderTimeTotal_s": float(render_total_s),
+        "RenderTimePerFrame_s": float(render_per_frame_s),
+        "scale_outlier_ratio": float(scale_outlier_ratio),
+        "opacity_low_coverage_ratio": float(opacity_low_cov_ratio),
+        "render_time_per_frame_s": float(render_per_frame_s),
         "bg": int(args.bg),
         "edge_thr": float(args.edge_thr),
         "BgLeakRatio_mean": float(np.mean(bg_leaks)) if bg_leaks else 0.0,
@@ -1317,6 +1803,11 @@ def main() -> None:
         "ellipsoid_proxy_enabled": bool(proxy_enabled),
         "ellipsoid_proxy_out_dir": str(proxy_out_dir) if proxy_enabled else "",
         "ellipsoid_proxy_opacity_mode": "opaque" if proxy_enabled else "off",
+        "sibr_ellipsoid_enabled": bool(sibr_enabled),
+        "sibr_ellipsoid_status": str(sibr_status),
+        "sibr_ellipsoid_out_dir": str(sibr_out_dir) if sibr_enabled else "",
+        "sibr_ellipsoid_source_frame_count": int(sibr_frame_src),
+        "sibr_ellipsoid_mode": str(getattr(args, "sibr_gaussian_mode", "ellipsoids")) if sibr_enabled else "",
     }
     if bg_sens_means:
         results["BgSensitivity_p50"] = float(np.percentile(bg_sens_means, 50.0))

@@ -289,6 +289,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     ss_logged_densify_trigger = False
     clamp_logged_rgb = False
+    ss_gate_densify = bool(getattr(args, "ss_gate_densify", False))
+    if getattr(args, "ss_enable", False) and (not ss_gate_densify):
+        print("[INFO] SparseSupport densify gating disabled (prune-only mode).")
     if getattr(args, "ss_enable", False):
         densify_possible = False
         try:
@@ -435,7 +438,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         print(f"[INFO] densify triggered at iter={iteration} (ss_enable=True)")
                         ss_logged_densify_trigger = True
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    ss_enabled_backup = None
+                    if getattr(args, "ss_enable", False) and (not ss_gate_densify) and getattr(gaussians, "_ss_enabled", False):
+                        ss_enabled_backup = gaussians._ss_enabled
+                        gaussians._ss_enabled = False
+                    try:
+                        gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    finally:
+                        if ss_enabled_backup is not None:
+                            gaussians._ss_enabled = ss_enabled_backup
                     if args.clamp_scale_after_densify and args.clamp_scale_max is not None:
                         clamped_gauss, total, before_smax, after_smax = gaussians.clamp_scaling_max_(args.clamp_scale_max)
                         if clamped_gauss > 0 and not clamp_logged_rgb:
@@ -605,8 +616,9 @@ if __name__ == "__main__":
     parser.add_argument("--ss_trim_tail_pct", type=float, default=0.0)
     parser.add_argument("--ss_drop_small_islands", type=int, default=0)
     parser.add_argument("--ss_island_radius", type=float, default=None)
+    parser.add_argument("--ss_gate_densify", action="store_true", default=False)
     parser.add_argument("--ss_prune_before_thermal", action="store_true", default=False)
-    parser.add_argument("--ss_prune_after_rgb", action="store_true", default=False)
+    parser.add_argument("--ss_prune_after_rgb", action="store_true", default=True)
     parser.add_argument("--debug_gaussian_stats", action="store_true", default=False)
     parser.add_argument("--clamp_scale_max", type=float, default=None)
     parser.add_argument("--clamp_scale_after_densify", action="store_true", default=False)
@@ -620,6 +632,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
+    if (not args.start_checkpoint) and args.ss_prune_after_rgb and (not args.ss_enable):
+        args.ss_enable = True
+        print("[INFO] ss_prune_after_rgb enabled by default; auto-enabling ss_enable for RGB stage.")
     
     print("Optimizing " + args.model_path)
 
