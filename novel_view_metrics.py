@@ -1512,8 +1512,8 @@ def main() -> None:
                         help="Dump per-view ellipsoid proxy images with exact same camera poses (default: off)")
     parser.add_argument("--ellipsoid_proxy_dir", type=str, default="",
                         help="Output directory for ellipsoid proxy images (default: <out_dir>_ellip)")
-    parser.add_argument("--dump_sibr_ellipsoid", type=_str2bool, nargs="?", const=True, default=True,
-                        help="Dump SIBR offline ellipsoid renders with the exact same camera path (default: on)")
+    parser.add_argument("--dump_sibr_ellipsoid", type=_str2bool, nargs="?", const=True, default=False,
+                        help="Dump SIBR offline ellipsoid renders with the exact same camera path (default: off)")
     parser.add_argument("--sibr_exe", type=str, default="",
                         help="Path to SIBR_gaussianViewer_app(.exe); auto-detected when empty")
     parser.add_argument("--sibr_out_dir", type=str, default="",

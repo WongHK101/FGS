@@ -630,7 +630,15 @@ if __name__ == "__main__":
     parser.add_argument("--t_struct_grad_w", type=float, default=0.0)
     parser.add_argument("--t_struct_grad_norm", type=_str2bool, default=True)
 
-    args = parser.parse_args(sys.argv[1:])
+    cli_args = sys.argv[1:]
+    args = parser.parse_args(cli_args)
+
+    # Thermal-stage default: if user did not explicitly pass --opacity_lr and a
+    # checkpoint is provided, use a conservative opacity lr to avoid geometry drift.
+    opacity_flag_set = any((a == "--opacity_lr") or a.startswith("--opacity_lr=") for a in cli_args)
+    if args.start_checkpoint and (not opacity_flag_set):
+        args.opacity_lr = 2e-4
+
     args.save_iterations.append(args.iterations)
     if (not args.start_checkpoint) and args.ss_prune_after_rgb and (not args.ss_enable):
         args.ss_enable = True

@@ -763,9 +763,9 @@ def main() -> None:
     ap.add_argument("--colmap", default="colmap", help="COLMAP executable (default: colmap). Can be colmap.exe / colmap.bat / full path.")
     ap.add_argument("--exiftool", default="exiftool", help="ExifTool executable (default: exiftool)")
 
-    ap.add_argument("--align", default="auto", choices=["auto", "fit", "exif", "ecc", "dual"], help="Which aligned RGB to use for COLMAP (default: auto)")
+    ap.add_argument("--align", default="fit", choices=["auto", "fit", "exif", "ecc", "dual"], help="Which aligned RGB to use for COLMAP (default: fit)")
     ap.add_argument("--auto_pick_mode", default="robust", choices=["legacy", "robust"],
-                    help="Auto-pick strategy when --align auto (default: legacy)")
+                    help="Auto-pick strategy when --align auto (default: robust)")
     ap.add_argument("--auto_pick_edge_f1_eps", type=float, default=0.002,
                     help="Robust auto-pick: keep candidates within this edge_f1 margin (default: 0.002)")
     ap.add_argument("--comparison", dest="comparison", action="store_true", default=True,
@@ -867,7 +867,7 @@ def main() -> None:
 
     # Stage 1 training defaults (RGB)
     ap.add_argument("--rgb_iter", type=int, default=30000)
-    ap.add_argument("--rgb_res", type=int, default=1)
+    ap.add_argument("--rgb_res", type=int, default=4)
     ap.add_argument("--rgb_densify_from", type=int, default=1500)
     ap.add_argument("--rgb_densify_until", type=int, default=10000)
     ap.add_argument("--rgb_densify_interval", type=int, default=300)
@@ -952,19 +952,19 @@ def main() -> None:
     ap.add_argument(
         "--ss_drop_small_islands",
         type=int,
-        default=2,
-        help="Drop tiny disconnected SS islands smaller than this many points (default: 2).",
+        default=5,
+        help="Drop tiny disconnected SS islands smaller than this many points (default: 5).",
     )
     ap.add_argument(
         "--ss_island_radius",
         type=float,
-        default=4.0,
-        help="Island grouping voxel radius (default: 4.0).",
+        default=5.0,
+        help="Island grouping voxel radius (default: 5.0).",
     )
 
     # Stage 2 training defaults (Thermal)
     ap.add_argument("--t_iter", type=int, default=60000)
-    ap.add_argument("--t_res", type=int, default=1)
+    ap.add_argument("--t_res", type=int, default=4)
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
     ap.add_argument("--t_opacity_lr", type=float, default=2e-4,
                     help="Thermal-only opacity lr (default: 2e-4)")
