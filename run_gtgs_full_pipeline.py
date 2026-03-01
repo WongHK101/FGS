@@ -316,6 +316,65 @@ def list_images(dir_path: Path) -> List[Path]:
     out.sort()
     return out
 
+
+def _read_colmap_image_names(model_dir: Path) -> List[str]:
+    """
+    Return image names recorded in COLMAP model (images.bin/txt), or [] on failure.
+    """
+    ext: Optional[str] = None
+    if (model_dir / "images.bin").exists():
+        ext = ".bin"
+    elif (model_dir / "images.txt").exists():
+        ext = ".txt"
+    if ext is None:
+        return []
+    try:
+        from utils.read_write_model import read_model  # local import to keep startup robust
+        _, images, _ = read_model(str(model_dir), ext=ext)
+        names = [str(im.name) for im in images.values() if getattr(im, "name", None)]
+        return sorted(set(names))
+    except Exception as e:
+        eprint(f"[WARN] Failed to read COLMAP image names from {model_dir}: {e}")
+        return []
+
+
+def _build_image_name_alias_dir(src_dir: Path, required_names: List[str], alias_dir: Path) -> Tuple[int, int]:
+    """
+    Build alias dir where files are named exactly as COLMAP expects.
+    Mapping uses filename stem (case-insensitive), so JPG/PNG mismatch can be bridged.
+    Returns: (linked_count, missing_count)
+    """
+    src_imgs = list_images(src_dir)
+    by_stem_ci: Dict[str, Path] = {}
+    for fp in src_imgs:
+        key = fp.stem.lower()
+        if key not in by_stem_ci:
+            by_stem_ci[key] = fp
+
+    if alias_dir.exists():
+        shutil.rmtree(alias_dir)
+    ensure_dir(alias_dir)
+
+    linked = 0
+    missing = 0
+    for req in required_names:
+        req_rel = Path(req)
+        src = by_stem_ci.get(req_rel.stem.lower())
+        if src is None:
+            missing += 1
+            continue
+        dst = alias_dir / req_rel
+        ensure_dir(dst.parent)
+        try:
+            if dst.exists():
+                dst.unlink()
+            os.symlink(src, dst)
+        except Exception:
+            shutil.copy2(src, dst)
+        linked += 1
+    return linked, missing
+
+
 def contains_any_file(root: Path, names: Tuple[str, ...], max_depth: int = 2) -> bool:
     """
     Returns True if any file with basename in `names` exists within `root` up to `max_depth`.
@@ -904,7 +963,7 @@ def main() -> None:
     )
 
     # Stage 2 training defaults (Thermal)
-    ap.add_argument("--t_iter", type=int, default=40000)
+    ap.add_argument("--t_iter", type=int, default=60000)
     ap.add_argument("--t_res", type=int, default=1)
     ap.add_argument("--t_feature_lr", type=float, default=0.001)
     ap.add_argument("--t_opacity_lr", type=float, default=2e-4,
@@ -1933,9 +1992,38 @@ def main() -> None:
         eprint(f"[INFO] Cleaning existing thermal_UD: {thermal_ud}")
         shutil.rmtree(thermal_ud)
 
+    th_dir_for_ud_effective = th_dir_for_ud
+    if _in_step_range(8):
+        model_names = _read_colmap_image_names(sparse_aligned)
+        if model_names:
+            thermal_names = {p.name for p in list_images(th_dir_for_ud)}
+            missing_exact = [n for n in model_names if n not in thermal_names]
+            if missing_exact:
+                thermal_stems = {p.stem.lower() for p in list_images(th_dir_for_ud)}
+                missing_by_stem = [n for n in missing_exact if Path(n).stem.lower() not in thermal_stems]
+                if not missing_by_stem:
+                    alias_dir = data_root / "_pipeline_tmp" / "thermal_ud_alias"
+                    linked, missing = _build_image_name_alias_dir(th_dir_for_ud, model_names, alias_dir)
+                    if missing == 0 and linked > 0:
+                        th_dir_for_ud_effective = alias_dir
+                        eprint(
+                            f"[INFO] Thermal image name alias enabled: src={th_dir_for_ud} -> alias={alias_dir} "
+                            f"(linked={linked})"
+                        )
+                    else:
+                        eprint(
+                            f"[WARN] Thermal alias build incomplete (linked={linked}, missing={missing}); "
+                            f"using original thermal dir: {th_dir_for_ud}"
+                        )
+                else:
+                    eprint(
+                        f"[WARN] Thermal names do not match sparse model (missing exact={len(missing_exact)}, "
+                        f"missing by stem={len(missing_by_stem)})."
+                    )
+
     undistort_cmd = [
         str(args.colmap), "image_undistorter",
-        "--image_path", str(th_dir_for_ud),
+        "--image_path", str(th_dir_for_ud_effective),
         "--input_path", str(sparse_aligned),
         "--output_path", str(thermal_ud),
         "--output_type", "COLMAP",
@@ -1949,8 +2037,8 @@ def main() -> None:
                 f"Expected: {sparse_aligned} (with cameras.bin/txt).\n"
                 "Run with --from_step 4 (or earlier), or fix your COLMAP outputs."
             )
-        if not th_dir_for_ud.exists():
-            _maybe_raise_file_not_found(f"Thermal directory not found: {th_dir_for_ud}")
+        if not th_dir_for_ud_effective.exists():
+            _maybe_raise_file_not_found(f"Thermal directory not found: {th_dir_for_ud_effective}")
 
     if not _in_step_range(8):
         eprint("[SKIP] 08_undistort_thermal (outside selected step range)")
