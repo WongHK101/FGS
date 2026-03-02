@@ -952,14 +952,14 @@ def main() -> None:
     ap.add_argument(
         "--ss_drop_small_islands",
         type=int,
-        default=5,
-        help="Drop tiny disconnected SS islands smaller than this many points (default: 5).",
+        default=10,
+        help="Drop tiny disconnected SS islands smaller than this many points (default: 10).",
     )
     ap.add_argument(
         "--ss_island_radius",
         type=float,
-        default=5.0,
-        help="Island grouping voxel radius (default: 5.0).",
+        default=10.0,
+        help="Island grouping voxel radius (default: 10.0).",
     )
 
     # Stage 2 training defaults (Thermal)
