@@ -170,14 +170,17 @@ If visuals improve while PSNR/SSIM do not, explicitly explain:
 
 ## 7) Environment Requirements for Reproducibility
 
-Use the same environment policy as `README.md`:
+Use pinned files in repo root:
 
-- conda `python=3.10`
-- PyTorch matching CUDA
-- 3DGS extensions: `diff_gaussian_rasterization`, `simple_knn`
-- optional IQA backends: `pyiqa`, `piq`, `flip-evaluator`
+- `environment.fgs.yml`
+- `requirements.txt`
 
-Missing IQA backend should produce `NaN` columns, not pipeline failure.
+Required native 3DGS extensions:
+
+- `diff_gaussian_rasterization`
+- `simple_knn`
+
+If optional IQA backends are missing, corresponding IQA columns are `NaN`.
 
 ---
 

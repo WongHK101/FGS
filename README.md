@@ -2,6 +2,8 @@
 
 Two-stage RGB -> Thermal Gaussian Splatting pipeline with resumable orchestration, geometry stabilization, sparse-support pruning, and extended evaluation.
 
+Language: [English](README.md) | [中文](README.zh.md)
+
 This README is the engineering/usage entry point.  
 For paper writing structure, see `README-paper.md` / `README-paper.zh.md`.
 
@@ -36,75 +38,38 @@ Deprecated/abandoned branches are intentionally not documented as default workfl
 
 ---
 
-## 3) Environment Setup (3DGS-Compatible, Explicit)
+## 3) Environment Setup
 
-This repo is designed to stay compatible with standard 3DGS-style environments.
+Use the pinned files:
 
-### 3.1 System prerequisites
+- `environment.fgs.yml`
+- `requirements.txt`
 
-- OS: Windows (PowerShell) or Linux
-- GPU: NVIDIA CUDA-capable GPU
-- Python: 3.10 (recommended)
-- Build tools (if compiling extensions):
-  - Windows: Visual Studio Build Tools + matching CUDA toolkit
-  - Linux: GCC/CMake + matching CUDA toolkit
-
-### 3.2 Create and activate conda env
+Create environment:
 
 ```powershell
-conda create -n fgs python=3.10 -y
+conda env create -f environment.fgs.yml
 conda activate fgs
-python -m pip install --upgrade pip
 ```
 
-### 3.3 Install PyTorch (match your CUDA)
-
-Use the official selector: https://pytorch.org/get-started/locally/
-
-Example (CUDA 12.1):
+If you install manually instead of `environment.fgs.yml`:
 
 ```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
 ```
 
-### 3.4 Install core Python deps used by this repo
-
-```powershell
-pip install numpy pillow opencv-python scipy scikit-image matplotlib tqdm plyfile pandas piexif openpyxl
-```
-
-### 3.5 Install 3DGS rasterization / KNN extensions
-
-If your environment does not already provide them, install the extensions required by imports:
-
-- `diff_gaussian_rasterization`
-- `simple_knn`
-
-Typical source-install pattern (from your 3DGS-compatible checkout):
+Install 3DGS extensions:
 
 ```powershell
 pip install .\submodules\diff-gaussian-rasterization
 pip install .\submodules\simple-knn
 ```
 
-If you use your own prebuilt/accelerated rasterizer stack, keep it consistent with your PyTorch/CUDA versions.
-
-### 3.6 Optional: extra IQA backends (for FLIP/FSIM/DISTS/...)
-
-`metrics_plus.py` supports graceful fallback. Missing backend -> metric is written as `NaN` (pipeline continues).
-
-To enable most extra IQAs:
-
-```powershell
-pip install pyiqa piq flip-evaluator
-```
-
-### 3.7 Minimal environment self-check
+Environment check:
 
 ```powershell
 python -c "import torch, numpy, cv2, PIL, plyfile, openpyxl; import diff_gaussian_rasterization, simple_knn; print('ENV_OK')"
 python -c "import pyiqa, piq, flip_evaluator; print('IQA_OK')"
-python -c "import py_compile; py_compile.compile('run_gtgs_full_pipeline.py', doraise=True); py_compile.compile('train.py', doraise=True); py_compile.compile('metrics_plus.py', doraise=True); py_compile.compile('novel_view_metrics.py', doraise=True); print('COMPILE_OK')"
 ```
 
 ---

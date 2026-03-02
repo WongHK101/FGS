@@ -1,0 +1,8 @@
+name: fgs
+channels:
+  - defaults
+dependencies:
+  - python=3.10.18
+  - pip=25.2
+  - pip:
+      - -r requirements.txt

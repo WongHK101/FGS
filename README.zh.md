@@ -34,75 +34,38 @@
 
 ---
 
-## 3）环境配置（按顶会开源风格写清楚）
+## 3）环境配置
 
-本项目尽量与原版 3DGS 环境兼容，仅增加评测依赖。
+环境文件：
 
-### 3.1 系统前置
+- `environment.fgs.yml`
+- `requirements.txt`
 
-- Windows（PowerShell）或 Linux
-- NVIDIA CUDA GPU
-- Python 3.10（推荐）
-- 若需编译扩展：
-  - Windows：Visual Studio Build Tools + 匹配 CUDA
-  - Linux：GCC/CMake + 匹配 CUDA
-
-### 3.2 创建虚拟环境
+创建环境：
 
 ```powershell
-conda create -n fgs python=3.10 -y
+conda env create -f environment.fgs.yml
 conda activate fgs
-python -m pip install --upgrade pip
 ```
 
-### 3.3 安装 PyTorch（按你的 CUDA 版本）
-
-请按官方选择器安装：https://pytorch.org/get-started/locally/
-
-示例（CUDA 12.1）：
+如果不使用 `environment.fgs.yml`，手动安装依赖：
 
 ```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
 ```
 
-### 3.4 安装本项目常用依赖
-
-```powershell
-pip install numpy pillow opencv-python scipy scikit-image matplotlib tqdm plyfile pandas piexif openpyxl
-```
-
-### 3.5 安装 3DGS 扩展（若环境里尚未有）
-
-项目运行依赖以下扩展：
-
-- `diff_gaussian_rasterization`
-- `simple_knn`
-
-常见安装方式（源码安装）：
+安装 3DGS 扩展：
 
 ```powershell
 pip install .\submodules\diff-gaussian-rasterization
 pip install .\submodules\simple-knn
 ```
 
-如果你使用自己已有的 3DGS/加速 rasterizer 环境，也可以继续沿用，但要保证与当前 `torch + cuda` 匹配。
-
-### 3.6 可选：额外 IQA 后端（FLIP/FSIM/DISTS 等）
-
-`metrics_plus.py` 支持缺失后端自动降级（写 `NaN`，不崩溃）。
-
-若希望完整输出额外 IQA：
-
-```powershell
-pip install pyiqa piq flip-evaluator
-```
-
-### 3.7 一键自检命令
+环境自检：
 
 ```powershell
 python -c "import torch, numpy, cv2, PIL, plyfile, openpyxl; import diff_gaussian_rasterization, simple_knn; print('ENV_OK')"
 python -c "import pyiqa, piq, flip_evaluator; print('IQA_OK')"
-python -c "import py_compile; py_compile.compile('run_gtgs_full_pipeline.py', doraise=True); py_compile.compile('train.py', doraise=True); py_compile.compile('metrics_plus.py', doraise=True); py_compile.compile('novel_view_metrics.py', doraise=True); print('COMPILE_OK')"
 ```
 
 ---

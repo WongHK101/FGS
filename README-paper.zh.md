@@ -178,12 +178,17 @@
 
 ## 7）环境复现要求（简写）
 
-- conda + Python 3.10
-- 与 CUDA 匹配的 PyTorch
-- 3DGS 扩展：`diff_gaussian_rasterization`、`simple_knn`
-- 额外 IQA 可选：`pyiqa`、`piq`、`flip-evaluator`
+请直接使用仓库根目录的锁定文件：
 
-说明：IQA 后端缺失时应输出 NaN，不影响主流程运行。
+- `environment.fgs.yml`
+- `requirements.txt`
+
+必需 3DGS 原生扩展：
+
+- `diff_gaussian_rasterization`
+- `simple_knn`
+
+额外 IQA 后端缺失时对应列输出 `NaN`。
 
 ---
 
