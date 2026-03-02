@@ -1,81 +1,172 @@
-# FGS-0202v1（中文版）  
-两阶段 RGB→Thermal Gaussian Splatting 管线说明
+﻿# FGS-0202v1（中文）
 
-本仓库是对 3D Gaussian Splatting 的工程化扩展，目标是稳定完成：
+面向 **RGB -> Thermal 两阶段 3DGS** 的工程化管线。  
+核心能力：断点续跑、几何稳定、SS 裁剪、热阶段稳态化、扩展评测。
 
-- Stage-1：RGB 重建（几何+外观）
-- Stage-2：Thermal 迁移训练（几何稳定、热纹理学习）
-- 端到端可恢复执行（1-14 步）
-- 扩展评测（结构、伪影、novel-view 稳定性）
+> 论文写作提纲请看：`README-paper.zh.md`（中文）或 `README-paper.md`（英文）。
 
 ---
 
-## 1. 目录与核心脚本
+## 1）当前主线改进（有效且启用）
 
-- `run_gtgs_full_pipeline.py`：主管线（步骤编排、断点续跑、参数透传）
-- `train.py`：训练入口（含 SGF / SS / clamp / thermal reset / t_struct_grad）
-- `scene/gaussian_model.py`：高斯参数与 SS 逻辑（NN、adaptive、island、prune）
-- `metrics.py`：基础指标（PSNR/SSIM/LPIPS）
-- `metrics_plus.py`：有 GT 的扩展指标
-- `novel_view_metrics.py`：无 GT novel-view 指标
-- `blend_model_strict_endpoints.py` + `eval_blend_sweep.py`：RGB-T 融合与评估
+- **SGF（Stable Geometry Freezing）**：热阶段恢复后重置 LR，避免优化器状态覆盖导致几何漂移。
+- **SparseSupport（SS）**：默认在 RGB 训练结束后做一次 prune（NN + adaptive + island）。
+- **热阶段稳定化三件套**：`clamp_scale_max_t`、`thermal_reset_features`、`t_struct_grad`。
+- **扩展评测**：
+  - `metrics.py`：PSNR/SSIM/LPIPS
+  - `metrics_plus.py`：结构/对齐/额外 IQA
+  - `novel_view_metrics.py`：无 GT 新视角稳定性与伪影
+  - `eval_blend_sweep.py`：RGB-T 融合扫权评测
+
+说明：废弃/失败分支不作为默认主线描述。
 
 ---
 
-## 2. 环境要求
+## 2）代码入口（建议阅读顺序）
 
-- OS：Windows（PowerShell）
-- Python：conda 环境（建议 `fgs`）
-- CUDA：建议可用（训练和部分 IQA 可走 GPU）
-- 主要依赖：仓库现有依赖（不需要额外改训练代码）
+- `run_gtgs_full_pipeline.py`：1-14 全流程编排、参数默认值、断点续跑。
+- `train.py`：训练主逻辑，含 SGF、SS prune 触发、热阶段损失。
+- `scene/gaussian_model.py`：SS 核心过滤与 prune、clamp 实现。
+- `metrics_plus.py`：有 GT 的扩展指标。
+- `novel_view_metrics.py`：无 GT 新视角指标。
+- `eval_blend_sweep.py`：最终融合模型评测。
+- `summarize_ablation_excel.py` / `summarize_output2_excel.py`：汇总出表。
 
-快速自检：
+---
+
+## 3）环境配置（按顶会开源风格写清楚）
+
+本项目尽量与原版 3DGS 环境兼容，仅增加评测依赖。
+
+### 3.1 系统前置
+
+- Windows（PowerShell）或 Linux
+- NVIDIA CUDA GPU
+- Python 3.10（推荐）
+- 若需编译扩展：
+  - Windows：Visual Studio Build Tools + 匹配 CUDA
+  - Linux：GCC/CMake + 匹配 CUDA
+
+### 3.2 创建虚拟环境
 
 ```powershell
-python -c "import torch; print(torch.__version__)"
-python -c "import py_compile; py_compile.compile('run_gtgs_full_pipeline.py', doraise=True); py_compile.compile('train.py', doraise=True); print('OK')"
+conda create -n fgs python=3.10 -y
+conda activate fgs
+python -m pip install --upgrade pip
+```
+
+### 3.3 安装 PyTorch（按你的 CUDA 版本）
+
+请按官方选择器安装：https://pytorch.org/get-started/locally/
+
+示例（CUDA 12.1）：
+
+```powershell
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+### 3.4 安装本项目常用依赖
+
+```powershell
+pip install numpy pillow opencv-python scipy scikit-image matplotlib tqdm plyfile pandas piexif openpyxl
+```
+
+### 3.5 安装 3DGS 扩展（若环境里尚未有）
+
+项目运行依赖以下扩展：
+
+- `diff_gaussian_rasterization`
+- `simple_knn`
+
+常见安装方式（源码安装）：
+
+```powershell
+pip install .\submodules\diff-gaussian-rasterization
+pip install .\submodules\simple-knn
+```
+
+如果你使用自己已有的 3DGS/加速 rasterizer 环境，也可以继续沿用，但要保证与当前 `torch + cuda` 匹配。
+
+### 3.6 可选：额外 IQA 后端（FLIP/FSIM/DISTS 等）
+
+`metrics_plus.py` 支持缺失后端自动降级（写 `NaN`，不崩溃）。
+
+若希望完整输出额外 IQA：
+
+```powershell
+pip install pyiqa piq flip-evaluator
+```
+
+### 3.7 一键自检命令
+
+```powershell
+python -c "import torch, numpy, cv2, PIL, plyfile, openpyxl; import diff_gaussian_rasterization, simple_knn; print('ENV_OK')"
+python -c "import pyiqa, piq, flip_evaluator; print('IQA_OK')"
+python -c "import py_compile; py_compile.compile('run_gtgs_full_pipeline.py', doraise=True); py_compile.compile('train.py', doraise=True); py_compile.compile('metrics_plus.py', doraise=True); py_compile.compile('novel_view_metrics.py', doraise=True); print('COMPILE_OK')"
 ```
 
 ---
 
-## 3. 管线步骤（1-14）
+## 4）数据目录约定
 
-1. CFR 对齐裁剪（`cfr.py`）
+每套数据（`--data_root`）至少包含：
+
+- `RGB/`
+- `thermal/`
+
+管线会自动生成：
+
+- `fit/`
+- `input/`
+- `distorted/`
+- `thermal_UD/`
+- `_pipeline_state/`（断点 marker）
+
+每个实验输出（`--out_root`）常见为：
+
+- `Model_RGB/`
+- `Model_T/`
+- `Model_F/`
+- `eval/`
+
+---
+
+## 5）管线步骤（1-14）
+
+1. CFR 对齐/裁剪（`cfr.py`）
 2. 裁剪质量评估（`eval_crop_metrics.py`）
 3. 准备 COLMAP 输入
 4. COLMAP 重建（`convert-gtgs.py`）
 5. RGB 训练
 6. RGB 渲染
-7. RGB 指标评估
-8. Thermal 去畸变（`thermal_UD`）
-9. sparse 规范化
-10. Thermal 训练
-11. Thermal 渲染
-12. Thermal 指标评估
-13. RGB-T 融合
-14. 融合 sweep 评估
+7. RGB 评测（`metrics.py` + `metrics_plus.py`）
+8. thermal 去畸变（依赖 step4 sparse）
+9. thermal sparse 规范化
+10. thermal 训练
+11. thermal 渲染
+12. thermal 评测（`metrics.py` + `metrics_plus.py` + `novel_view_metrics.py`）
+13. RGB/T 融合
+14. 融合扫权评测
 
-状态文件：`<data_root>/_pipeline_state/*.json`  
-可通过 `--from_step/--to_step` 局部运行。
+marker 在：`<data_root>/_pipeline_state/*.json`
 
 ---
 
-## 4. 当前主线改进（默认参数）
+## 6）当前默认参数（来自 argparse）
 
-以下为当前代码默认主线（可直接复现）：
+### 6.1 全局
 
-### 4.1 SGF（热阶段几何稳定）
+- `align=fit`
+- `comparison=true`
+- `rgb_iter=30000`，`t_iter=60000`
+- `rgb_res=4`，`t_res=4`
 
-- 默认开启（`--sgf_disable` 不传）
-- Thermal 几何学习率冻结（位置/缩放/旋转）
-- restore 后重设 optimizer LR，避免 checkpoint 覆盖
+### 6.2 SS 默认策略（当前主线）
 
-### 4.2 SS（SparseSupport，默认在 RGB 侧执行）
-
-- `ss_enable_rgb=True`
-- `ss_enable_t=False`
-- `ss_prune_after_rgb=True`
-- `ss_prune_before_thermal=False`
+- `ss_enable_rgb=true`
+- `ss_enable_t=false`
+- `ss_prune_after_rgb=true`
+- `ss_prune_before_thermal=false`
 - `ss_use_aabb=false`
 - `ss_voxel_size=1.5`
 - `ss_nn_dist_thr=3.5`
@@ -86,79 +177,100 @@ python -c "import py_compile; py_compile.compile('run_gtgs_full_pipeline.py', do
 - `ss_drop_small_islands=10`
 - `ss_island_radius=10.0`
 
-说明：当前 island 是在 NN 过滤后的保留集合上做连通域小岛删除。
+重点：默认是 **RGB 训练后一次性 prune**，不是训练中 densify gating。
 
-### 4.3 Thermal 稳定化
+### 6.3 热阶段默认
 
+- SGF 开（`sgf_disable=false`）
+- `t_opacity_lr=2e-4`
 - `clamp_scale_max_t=10.0`
-- `thermal_reset_features=True`
+- `thermal_reset_features=true`
 - `t_struct_grad_w=0.006`
 - `t_struct_grad_norm=true`
-- `t_opacity_lr=2e-4`
 
-### 4.4 评测默认
+### 6.4 评测默认
 
-- `run_metrics_plus=True`
-- `run_novel_view_metrics=True`
-- novel-view 默认：
-  - `mode=grid72`
-  - `grid_pitch_list=15,30,60`
-  - `grid_distance_factors=0.5,1,1.5`
-- SIBR 椭球导出默认关闭：
-  - `novel_dump_sibr_ellipsoid=false`
-  - `novel_dump_ellipsoid_proxy=false`
+- `run_metrics_plus=true`
+- `run_novel_view_metrics=true`
+- `metrics_plus_extra_iqa=flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3`
+- `metrics_plus_extra_iqa_space=y`
+- `metrics_plus_extra_iqa_device=cuda`
+- `novel_view_mode=grid72`
+- `novel_grid_azimuth_count=8`
+- `novel_grid_pitch_list=15,30,60`
+- `novel_grid_distance_factors=0.5,1,1.5`
+
+SIBR/椭球导出默认关闭：
+
+- `novel_dump_sibr_ellipsoid=false`
+- `novel_dump_ellipsoid_proxy=false`
 
 ---
 
-## 5. 快速运行
+## 7）常用命令
 
-## 5.1 一次完整流程（推荐）
+### 7.1 跑完整 1-14
 
 ```powershell
-python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\xr5\input\PVpanel" `
-  --out_root  "F:\databackup\xr5\output\PVpanel_full_default" `
-  --rgb_res 4 --t_res 4 `
-  --rgb_iter 30000 --t_iter 60000
+D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
+  --data_root "F:\databackup\xr6\input\PVpanel" `
+  --out_root "F:\databackup\xr6\output\PVpanel_full"
 ```
 
-## 5.2 仅跑 Thermal（复用已有 RGB）
+### 7.2 只跑 thermal（10-12）
 
 ```powershell
-python run_gtgs_full_pipeline.py `
-  --data_root "F:\databackup\xr5\input\PVpanel" `
-  --out_root  "F:\databackup\xr5\output\PVpanel_thermal_only" `
-  --from_step 10 --to_step 12 `
-  --rgb_res 4 --t_res 4 `
-  --rgb_iter 30000 --t_iter 60000
+D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
+  --data_root "F:\databackup\xr6\input\PVpanel" `
+  --out_root "F:\databackup\xr6\output\PVpanel_t_only" `
+  --from_step 10 --to_step 12
+```
+
+### 7.3 单模块消融示例（关 SGF）
+
+```powershell
+D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
+  --data_root "F:\databackup\xr6\input\PVpanel" `
+  --out_root "F:\databackup\xr6\output\PVpanel_no_sgf" `
+  --sgf_disable
 ```
 
 ---
 
-## 6. 常用排错
+## 8）常见问题
 
-- `thermal_UD seems incomplete`：
-  - 检查 `step8` 是否成功，`thermal_UD/images` 和 `thermal_UD/sparse/0` 是否存在。
-- `start_checkpoint not found`：
-  - 先跑到 step5，确认 `Model_RGB/chkpnt30000.pth` 存在。
-- 指标看起来与主观视觉不一致：
-  - 建议联合看 `metrics_plus`（结构）和 `novel_view_metrics`（无 GT 稳定性/伪影）。
+### 8.1 `thermal_UD seems incomplete`
+
+说明 step8 输出不完整。检查：
+
+- `<data_root>/thermal_UD/images/` 是否存在且非空
+- `<data_root>/thermal_UD/sparse/` 是否存在
+
+脚本已支持按文件 stem 做 `.jpg/.png` 兼容匹配。
+
+### 8.2 额外 IQA 列全是 `NaN`
+
+表示后端包缺失或不可用：
+
+- 安装 `pyiqa` / `piq` / `flip-evaluator`
+- 重新执行 step7/step12 评测
+
+### 8.3 断点续跑异常
+
+- 检查 `<data_root>/_pipeline_state/`
+- 用 `--from_step --to_step` 定位重跑
+- marker 与实际输出不一致时加 `--force`
 
 ---
 
-## 7. 论文复现建议
+## 9）复现建议
 
-- 首先固定主线默认参数，做完整 baseline。
-- 做逐模块去除（Ablation remove-one）而不是全排列。
-- 对每组保留：
-  - 命令行（`--save_cmds`）
-  - `results.json / results_plus.json / novel_view_metrics_grid.json`
-  - 关键可视化（normal + ellipsoid）
+- 每轮论文实验固定一个 conda 环境并冻结版本。
+- 保留 `--save_cmds` 与 profile/debug dump 便于追溯。
+- 消融时一次只改一个模块，避免结论混淆。
 
 ---
 
-## 8. 说明
+## 10）许可证
 
-- 本文档只覆盖当前主线有效改进。
-- 已弃用/验证失败方案不作为默认流程说明。
-
+本项目基于 Inria Gaussian Splatting 代码，许可条款见 `LICENSE.md`。
