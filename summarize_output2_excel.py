@@ -6,6 +6,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -163,8 +164,10 @@ class ExpTag:
 def _infer_tags(root: Path, exp_dir: Path, dataset_names: List[str]) -> ExpTag:
     rel = exp_dir.relative_to(root)
     parts = list(rel.parts)
-    # Preferred structure: <phase>/<dataset>/<experiment>
+    # XR6-style structure: <phase>/<experiment>/<dataset>
     if len(parts) >= 3:
+        if any(parts[2].lower() == d.lower() for d in dataset_names):
+            return ExpTag(phase=parts[0], dataset=parts[2], experiment=parts[1])
         return ExpTag(phase=parts[0], dataset=parts[1], experiment=parts[2])
     # Fallback: <phase_dataset_blob>/<experiment>
     if len(parts) >= 2:
@@ -179,7 +182,92 @@ def _infer_tags(root: Path, exp_dir: Path, dataset_names: List[str]) -> ExpTag:
     return ExpTag(phase="Unknown", dataset="Unknown", experiment=parts[-1] if parts else exp_dir.name)
 
 
-def _scan_rows(root: Path, dataset_names: List[str]) -> List[Dict[str, object]]:
+def _parse_timestamp(text: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _discover_campaign_logs(root: Path) -> List[Path]:
+    candidates: List[Path] = []
+    search_roots = {
+        root,
+        root / "Summaries",
+        root / "_summary（old）",
+    }
+    if root.name.lower() == "summaries":
+        search_roots.add(root.parent)
+        search_roots.add(root.parent / "_summary（old）")
+    for base in search_roots:
+        if not base.exists():
+            continue
+        for pattern in ("run_*campaign*.log", "Archive_run_*campaign*.log", "**/run_*campaign*.log", "**/Archive_run_*campaign*.log"):
+            for path in base.glob(pattern):
+                if path.is_file():
+                    candidates.append(path)
+    dedup: Dict[str, Path] = {}
+    for path in sorted(candidates):
+        dedup[str(path.resolve())] = path
+    return list(dedup.values())
+
+
+def _parse_campaign_logs(paths: List[Path]) -> Dict[Tuple[str, str, str], Dict[str, float]]:
+    timings: Dict[Tuple[str, str, str], Dict[str, float]] = {}
+    start_map: Dict[Tuple[str, str, str], Tuple[datetime, int, int]] = {}
+    start_re = re.compile(
+        r"^\[(?P<ts>[^\]]+)\]\s+START\s+(?P<phase>[^/]+)/(?P<experiment>[^/]+)/(?P<dataset>\S+)\s+from=(?P<from>\d+)\s+to=(?P<to>\d+)"
+    )
+    done_re = re.compile(
+        r"^\[(?P<ts>[^\]]+)\]\s+DONE\s+(?P<phase>[^/]+)/(?P<experiment>[^/]+)/(?P<dataset>\S+)"
+    )
+    for path in sorted(paths):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            _warn(f"Failed to read campaign log: {path} ({exc})")
+            continue
+        for line in lines:
+            m = start_re.match(line)
+            if m:
+                ts = _parse_timestamp(m.group("ts"))
+                if ts is None:
+                    continue
+                key = (m.group("phase"), m.group("experiment"), m.group("dataset"))
+                start_map[key] = (ts, int(m.group("from")), int(m.group("to")))
+                continue
+            m = done_re.match(line)
+            if not m:
+                continue
+            ts = _parse_timestamp(m.group("ts"))
+            if ts is None:
+                continue
+            key = (m.group("phase"), m.group("experiment"), m.group("dataset"))
+            start_item = start_map.get(key)
+            if start_item is None:
+                continue
+            start_ts, from_step, to_step = start_item
+            duration_s = max(0.0, (ts - start_ts).total_seconds())
+            timings[key] = {
+                "run_from_step": float(from_step),
+                "run_to_step": float(to_step),
+                "duration_s": duration_s,
+                "duration_min": duration_s / 60.0,
+            }
+            if from_step == 10 and to_step == 12:
+                timings[key]["time_step10_12_s"] = duration_s
+            if from_step == 1 and to_step == 12:
+                timings[key]["time_step1_12_s"] = duration_s
+            if from_step == 1 and to_step == 14:
+                timings[key]["time_step1_14_s"] = duration_s
+    return timings
+
+
+def _scan_rows(
+    root: Path,
+    dataset_names: List[str],
+    campaign_timings: Optional[Dict[Tuple[str, str, str], Dict[str, float]]] = None,
+) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     for results_json in root.rglob("Model_T/results.json"):
         model_t = results_json.parent
@@ -254,6 +342,8 @@ def _scan_rows(root: Path, dataset_names: List[str]) -> List[Dict[str, object]]:
 
         # Profile times if present
         row.update(_parse_profile_times(exp_dir))
+        if campaign_timings:
+            row.update(campaign_timings.get((tags.phase, tags.experiment, tags.dataset), {}))
 
         # Derived timing groups (available when profile has required step timings)
         step10_12 = _sum_if_all_present(
@@ -371,7 +461,9 @@ def main() -> None:
         raise SystemExit(f"Root does not exist: {root}")
 
     dataset_names = [x.strip() for x in str(args.datasets).split(",") if x.strip()]
-    rows = _scan_rows(root, dataset_names)
+    campaign_logs = _discover_campaign_logs(root)
+    campaign_timings = _parse_campaign_logs(campaign_logs)
+    rows = _scan_rows(root, dataset_names, campaign_timings)
     if not rows:
         raise SystemExit(f"No experiments found under: {root} (expected Model_T/results.json)")
 

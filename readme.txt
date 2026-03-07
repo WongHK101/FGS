@@ -154,8 +154,9 @@ python eval_blend_sweep.py `
   --out_dir "F:\databackup\GeoTGS\output\PV-r4\eval" `
   --auto_render
 # 查看模型：
-E:\3DGS\GS\gaussian-splatting\SIBR_viewers\install\bin\SIBR_gaussianViewer_app.exe `
--m "F:\databackup\CFRv2test\out_dual_03_07\Model_RGB"
+D:\dataset\FGS\FGS-0202v1\SIBR_viewers\install\bin\SIBR_gaussianViewer_app.exe `
+--device 0 `
+-m F:\databackup\xr6\output\Ch4_2_MainComparison\M01_OursFull_Default\PVpanel\Model_T
 
 draft:
 python train.py `
