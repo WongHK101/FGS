@@ -1431,8 +1431,8 @@ def main() -> int:
                     help="If set, output comparison montages (slower).")
 
     # user-requested defaults
-    ap.add_argument("--align", type=str, default="both", choices=["exif", "fit", "ecc", "both", "all"],
-                    help="Which aligned outputs to generate: exif/fit/ecc/both/all (default both).")
+    ap.add_argument("--align", type=str, default="both", choices=["exif", "fit", "ecc", "both", "all", "raw"],
+                    help="Which aligned outputs to generate: exif/fit/ecc/both/all/raw (default both).")
     ap.add_argument("--stage", type=str, default="both", choices=["fit", "apply", "both"],
                     help="Which stages to run: fit/apply/both (default both).")
 
@@ -1469,7 +1469,8 @@ def main() -> int:
     suffix = out_dir.name
 
     # flags
-    want_comp = bool(args.comparison)
+    want_raw = (args.align == "raw")
+    want_comp = bool(args.comparison and not want_raw)
     want_fit = args.align in ("fit", "both", "all")
     want_exif = args.align in ("exif", "both", "all")
     want_ecc = args.align in ("ecc", "all")
@@ -1528,6 +1529,8 @@ def main() -> int:
     logger.log("INFO", f"stage={args.stage} align={args.align} comparison={want_comp}")
     logger.log("INFO", f"piexif_installed={HAS_PIEXIF}")
     logger.log("INFO", f"exiftool_found={bool(find_exiftool())}")
+    if want_raw and args.comparison:
+        logger.log("WARN", "[RAW] comparison output is ignored in --align raw mode.")
     if want_ecc:
         if allow_rot and theta_req != theta_deg:
             logger.log("WARN", f"[ECC] sfm_rot_deg clamped from {theta_req:.3f} to {theta_deg:.3f} (max={max_theta:.3f})")
@@ -1546,6 +1549,38 @@ def main() -> int:
         logger.log("ERROR", "No matched pairs found. Check filenames by stem.")
         logger.close()
         return 2
+
+    if want_raw:
+        summary = {
+            "align": args.align,
+            "stage": args.stage,
+            "comparison": bool(want_comp),
+            "raw_mode": True,
+            "counts": {
+                "pairs_found": int(pairs_found),
+                "pairs_processed": int(pairs_found),
+                "fit_written": 0,
+                "exif_written": 0,
+                "ecc_written": 0,
+                "dual_rgb_written": 0,
+                "dual_th_written": 0,
+            },
+            "outputs": {
+                "image_fit_dir": None,
+                "image_exif_dir": None,
+                "image_ecc_dir": None,
+                "image_dual_dir": None,
+                "thermal_dual_dir": None,
+                "comparison_dir": None,
+            },
+        }
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        logger.log("INFO", "[RAW] No aligned outputs requested. Original RGB should be used directly by the caller.")
+        logger.log("INFO", f"[SUMMARY] summary={summary_path}")
+        logger.log("INFO", "RUN END")
+        logger.close()
+        return 0
 
     pairs = pairs_all
     if args.samples is not None and args.samples > 0 and args.samples < len(pairs):

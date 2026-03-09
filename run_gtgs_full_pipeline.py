@@ -763,7 +763,8 @@ def main() -> None:
     ap.add_argument("--colmap", default="colmap", help="COLMAP executable (default: colmap). Can be colmap.exe / colmap.bat / full path.")
     ap.add_argument("--exiftool", default="exiftool", help="ExifTool executable (default: exiftool)")
 
-    ap.add_argument("--align", default="fit", choices=["auto", "fit", "exif", "ecc", "dual"], help="Which aligned RGB to use for COLMAP (default: fit)")
+    ap.add_argument("--align", default="fit", choices=["auto", "fit", "exif", "ecc", "dual", "raw"],
+                    help="Which RGB source to use for COLMAP: aligned candidate or raw RGB (default: fit)")
     ap.add_argument("--auto_pick_mode", default="robust", choices=["legacy", "robust"],
                     help="Auto-pick strategy when --align auto (default: robust)")
     ap.add_argument("--auto_pick_edge_f1_eps", type=float, default=0.002,
@@ -1620,6 +1621,7 @@ def main() -> None:
     th_dual = fit_dir / "thermal" / "thermal-dual"
     need_ecc = (args.align == "ecc")
     need_dual = (args.align == "dual")
+    need_raw = (args.align == "raw")
 
     # -------- 1) CFR
     if args.clean_fit and fit_dir.exists():
@@ -1646,7 +1648,10 @@ def main() -> None:
         )
     if need_ecc:
         cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
-    if not _in_step_range(1):
+    if need_raw:
+        eprint("[SKIP] 01_cfr (--align raw uses original RGB directly)")
+        _record_step("01_cfr", "skip_raw", cfr_cmd, outputs_ok=True, note=f"align=raw; src={rgb_dir}")
+    elif not _in_step_range(1):
         eprint("[SKIP] 01_cfr (outside selected step range)")
         _record_step("01_cfr", "skip_range", cfr_cmd, outputs_ok=cfr_outputs_ok)
     else:
@@ -1705,7 +1710,10 @@ def main() -> None:
             # Default path should not auto-pick dual from stale summaries.
             eval_outputs_ok = eval_outputs_ok and ("dual" not in tags)
 
-    if not _in_step_range(2):
+    if need_raw:
+        eprint("[SKIP] 02_eval_crop (--align raw bypasses CFR candidate evaluation)")
+        _record_step("02_eval_crop", "skip_raw", eval_cmd_base, outputs_ok=True, note=f"align=raw; src={rgb_dir}")
+    elif not _in_step_range(2):
 
         eprint("[SKIP] 02_eval_crop (outside selected step range)")
 
@@ -1771,7 +1779,10 @@ def main() -> None:
             write_marker(marker_path(state_dir, "02_eval_crop"), "02_eval_crop", eval_cmd_base, cwd=gs_root)
 
     # -------- 3) Decide which candidate to use, then prepare input/
-    if args.align == "fit":
+    if args.align == "raw":
+        chosen_tag = "raw"
+        chosen_dir = rgb_dir
+    elif args.align == "fit":
         chosen_tag = "fit"
         chosen_dir = cand_fit
     elif args.align == "exif":
