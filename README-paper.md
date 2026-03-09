@@ -1,209 +1,132 @@
-﻿# README-paper (Paper-Writing Brief)
+# README-paper
 
-This file is a structured brief for drafting papers from this repository.
-It focuses on **active method components only** (no deprecated branches).
+This file is the paper-writing brief for the current mainline only.
+It is meant to be fed together with the summary workbooks to drafting tools or collaborators.
 
----
+## Method Summary
 
-## 1) One-Sentence Method Summary
+FGS is a reproducible two-stage RGB -> Thermal Gaussian Splatting pipeline. The active method consists of four parts:
+- `SGF`: restore-time LR correction and stage-2 geometry freezing
+- `SS`: post-RGB sparse-support pruning
+- thermal stabilizers: `clamp_scale_max_t`, `thermal_reset_features`, `t_struct_grad`
+- expanded evaluation: reference, structure, IQA, and no-reference novel-view metrics
 
-We build a reproducible two-stage RGB->Thermal Gaussian Splatting pipeline that improves thermal-stage robustness by combining geometry freezing (SGF), sparse-support post-RGB pruning (SS), thermal stabilization (clamp + feature reset + structure-grad), and expanded evaluation beyond PSNR/SSIM/LPIPS.
+## Code Anchors
 
----
+- `run_gtgs_full_pipeline.py`: 1-14 pipeline orchestration and defaults
+- `train.py`: stage-aware training, SGF, prune timing, thermal losses
+- `scene/gaussian_model.py`: SS filtering/pruning and scale clamp
+- `metrics_plus.py`: GT-based extended metrics and extra IQA
+- `novel_view_metrics.py`: no-reference novel-view metrics
+- `eval_blend_sweep.py`: blend sweep evaluation
 
-## 2) Method Modules and Code Anchors
+## Current Reproducible Defaults
 
-### 2.1 Two-stage pipeline
+These are the defaults to cite unless a specific experiment overrides them.
 
-- Stage-1 RGB reconstruction
-- Stage-2 thermal adaptation from RGB checkpoint
-- Optional RGB-T blending and sweep evaluation
-
-Code anchors:
-
-- `run_gtgs_full_pipeline.py` (steps 1-14 orchestration)
-- `train.py` (stage-dependent training logic)
-- `blend_model_strict_endpoints.py`, `eval_blend_sweep.py` (final blend evaluation)
-
-### 2.2 SGF (Stable Geometry Freezing)
-
-Purpose:
-
-- prevent restore-time optimizer-state LR carryover from violating stage-2 freeze intent
-- keep stage-2 geometry stable while adapting appearance
-
-Code anchors:
-
-- `train.py`: restore flow + `_reapply_lrs_after_restore()`
-- switch: `--sgf_disable`
-
-### 2.3 SparseSupport (SS) post-RGB prune
-
-Purpose:
-
-- remove unsupported/floating gaussians before stage-2
-
-Mechanisms:
-
-- NN gate (`ss_nn_dist_thr` + voxel index)
-- adaptive threshold (`ss_adaptive_*`)
-- island removal (`ss_drop_small_islands`, `ss_island_radius`)
-
-Code anchors:
-
-- `scene/gaussian_model.py`: `set_sparse_support`, `_ss_gate_selected_mask`, `_ss_query_nn_d1_d2`, `_ss_filter_small_islands`, `prune_outside_sparse_support`
-- `train.py`: `ss_prune_after_rgb`, `ss_prune_before_thermal`
-
-### 2.4 Thermal-stage stabilizers
-
-- scale clamp (`clamp_scale_max_t`)
-- feature reset after restore (`thermal_reset_features`)
-- thermal structure gradient loss (`t_struct_grad_w`, `t_struct_grad_norm`)
-
-Code anchors:
-
-- `scene/gaussian_model.py`: `clamp_scaling_max_`
-- `train.py`: clamp/reset integration points
-- `utils/loss_utils.py`: `structure_grad_loss`
-
----
-
-## 3) Reproducible Default Recipe (Current)
-
-Read directly from `run_gtgs_full_pipeline.py` defaults:
-
+Global:
+- `align=fit`
+- `comparison=true`
 - `rgb_iter=30000`, `t_iter=60000`
 - `rgb_res=4`, `t_res=4`
-- `align=fit`
 
-Mainline module defaults:
-
-- SGF: on
-- SS: enabled on RGB only, with `ss_prune_after_rgb=true`
-- Thermal SS: off by default
+SparseSupport:
+- `ss_enable_rgb=true`
+- `ss_enable_t=false`
+- `ss_prune_after_rgb=true`
+- `ss_prune_before_thermal=false`
 - `ss_use_aabb=false`
-- `ss_voxel_size=1.5`, `ss_nn_dist_thr=3.5`
-- `ss_adaptive_nn=true`, `alpha=1.2`, `beta=0.2`, `max_scale=2.0`
-- `ss_drop_small_islands=10`, `ss_island_radius=10.0`
+- `ss_voxel_size=1.5`
+- `ss_nn_dist_thr=3.5`
+- `ss_adaptive_nn=true`
+- `ss_adaptive_alpha=1.2`
+- `ss_adaptive_beta=0.2`
+- `ss_adaptive_max_scale=2.0`
+- `ss_drop_small_islands=10`
+- `ss_island_radius=10.0`
+
+Thermal stage:
+- SGF on
+- `t_opacity_lr=2e-4`
 - `clamp_scale_max_t=10.0`
 - `thermal_reset_features=true`
 - `t_struct_grad_w=0.006`
-- `t_opacity_lr=2e-4`
+- `t_struct_grad_norm=true`
 
----
+Evaluation:
+- `run_metrics_plus=true`
+- `run_novel_view_metrics=true`
+- extra IQA on `Y` with `cuda`
+- grid novel-view protocol: `azimuth=8`, `pitch=15,30,60`, `distance_factors=0.5,1,1.5`
 
-## 4) Evaluation Stack (Paper-Oriented)
+## What the Method Is Claiming
 
-### 4.1 Reference metrics (with GT)
+The current results support the following claim:
+- competitive reconstruction quality
+- cleaner outputs and lower halo/background leakage
+- much lighter Gaussian representation than heavier Gaussian baselines
 
-- Base: `PSNR`, `SSIM`, `LPIPS` (`metrics.py`)
-- Extended (`metrics_plus.py`):
-  - alignment-robust structure (`AlignedGradientCorr`, `AlignedEdgeF1_best`, etc.)
-  - texture/edge quality proxies
-  - optional extra IQA (FLIP/FSIM/DISTS/VIF/MS-SSIM/...)
+The current results do not support the claim that FGS is uniformly best on every traditional test-view metric against every baseline.
 
-### 4.2 No-reference novel-view metrics
+## Tables to Use in the Paper
 
-`novel_view_metrics.py` outputs stability/cleanliness indicators, including (depending on mode/config):
+Primary entry:
+- `F:\databackup\xr6\output\Summaries\Paper_Final.xlsx`
+- `F:\databackup\xr6\output\Summaries\Paper_Final_QA.json`
 
-- local temporal flicker
-- air-region artifact proxies
-- spike/edge clutter proxies
-- background sensitivity proxies
-- aggregated novel quality score
+Main-text recommendation:
+- `SOTA_Main`
+- `SOTA_Efficiency`
+- `Ablation_RemoveOne`
+- `Ablation_SS`
 
-### 4.3 Blend evaluation
+Appendix recommendation:
+- `Ablation_Combinations`
+- `Ablation_Efficiency`
+- `Master_All`
+- `QA`
 
-`eval_blend_sweep.py` evaluates multiple blend weights and methods and writes summary tables for final fused model selection.
+## Recommended Main-Text Metrics
 
----
+Primary comparison metrics:
+- `PSNR`
+- `SSIM`
+- `LPIPS`
+- `EdgeF1_best`
+- `AlignedGradientCorr`
+- `IQA_flip`
+- `IQA_fsim`
 
-## 5) Suggested Experiment Chapters (for paper)
+Cleanliness/lightweight support metrics:
+- `BgLeakRatio_band`
+- `EdgeHaloScore`
+- `gaussian_count`
+- `ply_mb`
+- `core_model_mb`
 
-### Chapter A: Main comparison
+Use `core_model_mb` and `artifact_mb` for all-method efficiency comparison.  
+Use `gaussian_count` and `ply_mb` only for Gaussian-representation methods.
 
-- Compare final method vs baseline(s) on all datasets.
-- Report both traditional and structure/novel-view metrics.
-- Provide representative visual comparisons (normal + ellipsoid diagnostics if used).
+## Notes on Interpretation
 
-### Chapter B: Remove-one ablation (module validity)
+If visuals improve while PSNR/SSIM do not, the paper should explicitly explain that:
+- pixel fidelity and structural cleanliness are different objectives
+- SGF and SS reduce unstable compensation behavior and floating artifacts
+- structure/no-reference metrics are needed to capture practical visual quality
 
-Use a full-config baseline and remove one module per run:
+## Inputs to Give a Writing Model
 
-- no SGF
-- no SS
-- no adaptive
-- no island
-- no clamp
-- no thermal reset
-- no t_struct_grad
-- opacity LR variant
-
-### Chapter C: Parameter sensitivity (lightweight)
-
-Recommended to keep focused and bounded:
-
-- island sensitivity (`drop_small_islands`, `island_radius`)
-- opacity LR around selected default
-- optional adaptive NN neighborhood (alpha/beta)
-
-### Chapter D: Efficiency & lightweight
-
-Report:
-
-- gaussian count
-- checkpoint / ply size
-- stage-2 time (or step-window time)
-- optional render-time proxy from novel metrics
-
----
-
-## 6) Notes on Metric Divergence (important for writing)
-
-If visuals improve while PSNR/SSIM do not, explicitly explain:
-
-- pixel-wise fidelity and structural/artifact quality are different objectives
-- geometry stabilization reduces overfitting-style pixel compensation
-- structure/no-ref metrics are needed to capture practical visual cleanliness
-
----
-
-## 7) Environment Requirements for Reproducibility
-
-Use pinned files in repo root:
-
-- `environment.fgs.yml`
-- `requirements.txt`
-
-Required native 3DGS extensions:
-
-- `diff_gaussian_rasterization`
-- `simple_knn`
-
-If optional IQA backends are missing, corresponding IQA columns are `NaN`.
-
----
-
-## 8) What to Feed Web GPT for Drafting
-
-Provide these artifacts together:
-
-- this file (`README-paper.md`)
+Provide these files together:
 - `README.md`
-- experiment summary tables (`summary.xlsx` / csv)
-- key config/command dumps (`cmd_*.txt`, profile/debug json)
+- `README-paper.md`
+- `F:\databackup\xr6\output\Summaries\Paper_Final.xlsx`
+- `F:\databackup\xr6\output\Summaries\Paper_Final_QA.json`
+- `F:\databackup\xr6\output\Summaries\README_SUMMARIES.md`
+- representative visual comparisons from XR6 and SOTA runs
 
-Then ask for:
+## Scope Boundary
 
-1. full paper skeleton
-2. method section aligned to code anchors
-3. experiment section using only provided numeric results
-4. ablation section with remove-one logic
-5. limitation/failure cases
+Do not describe discarded branches or one-off debugging paths as final method components.  
+Do not claim full average-metric dominance over every Gaussian thermal baseline.  
+Center the paper narrative on the quality-cleanliness-lightweight trade-off.
 
----
-
-## 9) Scope Boundary
-
-This brief only covers currently active and reproducible mainline modules.
-Do not include discarded branches in the final paper narrative unless explicitly needed as historical notes.

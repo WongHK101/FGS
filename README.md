@@ -1,107 +1,97 @@
-﻿# FGS-0202v1
+# FGS-0202v1
 
-Two-stage RGB -> Thermal Gaussian Splatting pipeline with resumable orchestration, geometry stabilization, sparse-support pruning, and extended evaluation.
+Language: [English](README.md) | [??](README.zh.md)  
+Paper brief: [README-paper.md](README-paper.md) | [README-paper.zh.md](README-paper.zh.md)
 
-Language: [English](README.md) | [中文](README.zh.md)
+FGS-0202v1 is a two-stage RGB -> Thermal Gaussian Splatting pipeline with resumable orchestration, geometry stabilization, sparse-support pruning, thermal-stage regularization, and extended evaluation.
 
-This README is the engineering/usage entry point.  
-For paper writing structure, see `README-paper.md` / `README-paper.zh.md`.
+## Overview
 
----
+Active method components:
+- `SGF` (Stable Geometry Freezing) for stage-2 restore-time LR correction and geometry stability.
+- `SparseSupport` (`SS`) as a one-shot prune after RGB by default.
+- Thermal stabilizers: `clamp_scale_max_t`, `thermal_reset_features`, `t_struct_grad`.
+- Extended evaluation: `metrics.py`, `metrics_plus.py`, `novel_view_metrics.py`, `eval_blend_sweep.py`.
 
-## 1) What Is Included (Mainline Features)
+Main code entry points:
+- `run_gtgs_full_pipeline.py`: full 1-14 pipeline, defaults, resume/skip.
+- `train.py`: stage-aware training logic, SGF, SS prune triggers, thermal loss injection.
+- `scene/gaussian_model.py`: SS filtering/prune internals and clamp.
+- `metrics_plus.py`: GT-based extended metrics and extra IQA.
+- `novel_view_metrics.py`: no-reference novel-view metrics.
+- `eval_blend_sweep.py`: RGB-T blend sweep evaluation.
+- `summarize_output2_excel.py`, `summarize_sota_comparison.py`, `summarize_paper_final.py`: experiment aggregation.
 
-Current mainline (active) improvements:
+## Environment
 
-- **SGF (Stable Geometry Freezing)** for stage-2 (thermal) restore-time LR correction and geometry stability.
-- **SparseSupport (SS)** with NN/adaptive/island filtering, used as **post-RGB one-shot prune** by default.
-- **Thermal stabilizers**: `clamp_scale_max_t`, `thermal_reset_features`, `t_struct_grad`.
-- **Expanded metrics**:
-  - `metrics.py` (PSNR/SSIM/LPIPS)
-  - `metrics_plus.py` (structure/alignment/extra IQA)
-  - `novel_view_metrics.py` (no-ref novel-view quality/stability)
-  - blend sweep evaluation (`eval_blend_sweep.py`).
-
-Deprecated/abandoned branches are intentionally not documented as default workflow.
-
----
-
-## 2) Repository Map (Read Order)
-
-- `run_gtgs_full_pipeline.py`: full 1-14 pipeline, resume/skip, default recipe, experiment control.
-- `train.py`: training loop, restore flow, SGF, SS prune triggers, thermal loss injection.
-- `scene/gaussian_model.py`: SS gating/prune internals + clamp implementation.
-- `metrics_plus.py`: GT-based extended metrics and extra IQA backend handling.
-- `novel_view_metrics.py`: novel-view rendering path + no-reference metrics.
-- `eval_blend_sweep.py`: RGB-T blend scoring and final model selection.
-- `summarize_ablation_excel.py`, `summarize_output2_excel.py`: experiment aggregation to Excel.
-
----
-
-## 3) Environment Setup
-
-Use the pinned files:
-
+Pinned environment files:
 - `environment.fgs.yml`
 - `requirements.txt`
 
-Create environment:
+Create the environment:
 
 ```powershell
 conda env create -f environment.fgs.yml
 conda activate fgs
 ```
 
-If you install manually instead of `environment.fgs.yml`:
+Manual install:
 
 ```powershell
 pip install -r requirements.txt
-```
-
-Install 3DGS extensions:
-
-```powershell
 pip install .\submodules\diff-gaussian-rasterization
 pip install .\submodules\simple-knn
 ```
 
-Environment check:
+Locked core package versions:
+- `python==3.10.18`
+- `torch==2.0.1`
+- `torchvision==0.15.2`
+- `numpy==1.26.4`
+- `Pillow==11.1.0`
+- `opencv-python==4.10.0.84`
+- `scipy==1.15.3`
+- `scikit-image==0.25.2`
+- `matplotlib==3.10.5`
+- `tqdm==4.67.1`
+- `plyfile==1.1.2`
+- `pandas==2.3.3`
+- `piexif==1.1.3`
+- `openpyxl==3.1.5`
+- `pyiqa==0.1.14.1`
+- `piq==0.8.0`
+- `flip-evaluator==1.7`
+
+Quick checks:
 
 ```powershell
 python -c "import torch, numpy, cv2, PIL, plyfile, openpyxl; import diff_gaussian_rasterization, simple_knn; print('ENV_OK')"
 python -c "import pyiqa, piq, flip_evaluator; print('IQA_OK')"
 ```
 
----
+## Data Layout
 
-## 4) Data Layout
-
-Per dataset root (`--data_root`), expected inputs:
-
+Per dataset root (`--data_root`) the raw inputs are:
 - `RGB/`
 - `thermal/`
 
 Pipeline-generated folders include:
-
 - `fit/`
 - `input/`
 - `distorted/`
 - `thermal_UD/`
-- `_pipeline_state/` (resume markers)
+- `_pipeline_state/`
 
-Per experiment output (`--out_root`), typical folders:
-
+Per experiment output (`--out_root`) the main folders are:
 - `Model_RGB/`
 - `Model_T/`
-- `Model_F/` (blend result)
+- `Model_F/`
 - `eval/`
 
----
-
-## 5) Pipeline Steps (1-14)
+## Pipeline Steps
 
 1. CFR alignment/cropping (`cfr.py`)
-2. crop quality eval (`eval_crop_metrics.py`)
+2. crop quality evaluation (`eval_crop_metrics.py`)
 3. prepare COLMAP input
 4. COLMAP conversion/reconstruction (`convert-gtgs.py`)
 5. RGB training (`train.py`)
@@ -113,23 +103,21 @@ Per experiment output (`--out_root`), typical folders:
 11. thermal render
 12. thermal metrics (`metrics.py`, `metrics_plus.py`, `novel_view_metrics.py`)
 13. RGB/T blend (`blend_model_strict_endpoints.py`)
-14. blend sweep eval (`eval_blend_sweep.py`)
+14. blend sweep evaluation (`eval_blend_sweep.py`)
 
 Resume markers are stored under `<data_root>/_pipeline_state/*.json`.
 
----
+## Current Default Recipe
 
-## 6) Current Default Recipe (from argparse defaults)
+The defaults below are taken from `run_gtgs_full_pipeline.py`.
 
-### 6.1 Global
-
+Global:
 - `align=fit`
 - `comparison=true`
 - `rgb_iter=30000`, `t_iter=60000`
 - `rgb_res=4`, `t_res=4`
 
-### 6.2 SparseSupport default behavior
-
+SparseSupport default behavior:
 - `ss_enable_rgb=true`
 - `ss_enable_t=false`
 - `ss_prune_after_rgb=true`
@@ -144,20 +132,19 @@ Resume markers are stored under `<data_root>/_pipeline_state/*.json`.
 - `ss_drop_small_islands=10`
 - `ss_island_radius=10.0`
 
-Important: default strategy is **one-shot prune after RGB**.  
-Training-time densify gating is **not enabled by default**.
+Important:
+- the default SS path is a one-shot prune after RGB
+- training-time densify gating is off by default
 
-### 6.3 Thermal stage defaults
-
-- SGF enabled (`sgf_disable=false`)
+Thermal stage defaults:
+- SGF enabled
 - `t_opacity_lr=2e-4`
 - `clamp_scale_max_t=10.0`
 - `thermal_reset_features=true`
 - `t_struct_grad_w=0.006`
 - `t_struct_grad_norm=true`
 
-### 6.4 Evaluation defaults
-
+Evaluation defaults:
 - `run_metrics_plus=true`
 - `run_novel_view_metrics=true`
 - `metrics_plus_extra_iqa=flip,dists,fsim,vif,ms-ssim,gmsd,haarpsi,niqe,brisque,piqe,hdrvdp3`
@@ -167,17 +154,12 @@ Training-time densify gating is **not enabled by default**.
 - `novel_grid_azimuth_count=8`
 - `novel_grid_pitch_list=15,30,60`
 - `novel_grid_distance_factors=0.5,1,1.5`
-
-SIBR/ellipsoid dump defaults:
-
-- `novel_dump_sibr_ellipsoid=false`
 - `novel_dump_ellipsoid_proxy=false`
+- `novel_dump_sibr_ellipsoid=false`
 
----
+## Common Commands
 
-## 7) Common Commands
-
-### 7.1 Full run (1-14)
+Full pipeline (1-14):
 
 ```powershell
 D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
@@ -185,7 +167,7 @@ D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
   --out_root "F:\databackup\xr6\output\PVpanel_full"
 ```
 
-### 7.2 Resume only thermal stage (10-12)
+Thermal-only rerun (10-12):
 
 ```powershell
 D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
@@ -194,7 +176,7 @@ D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
   --from_step 10 --to_step 12
 ```
 
-### 7.3 Toggle one module (example: disable SGF)
+Single-module ablation example:
 
 ```powershell
 D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
@@ -203,42 +185,42 @@ D:\anaconda\envs\fgs\python.exe run_gtgs_full_pipeline.py `
   --sgf_disable
 ```
 
----
+## Summaries
 
-## 8) Troubleshooting
+XR6 paper summaries:
+- `F:\databackup\xr6\output\Summaries\Paper_Final.xlsx`
+- `F:\databackup\xr6\output\Summaries\Paper_Final_Source.csv`
+- `F:\databackup\xr6\output\Summaries\Paper_Final_QA.json`
 
-### 8.1 `thermal_UD seems incomplete`
+SOTA comparison summaries:
+- `F:\databackup\xr6\output\SOTA_Comparison\Summaries\SOTA_Unified_Main.xlsx`
+- `F:\databackup\xr6\output\SOTA_Comparison\Summaries\SOTA_Unified_Efficiency.xlsx`
+- `F:\databackup\xr6\output\SOTA_Comparison\Summaries\SOTA_Unified_QA.json`
 
-Step-8 output validation failed. Check:
+Use `F:\databackup\xr6\output\Summaries\README_SUMMARIES.md` for the XR6 table map.  
+Use `F:\databackup\xr6\output\SOTA_Comparison\Summaries\README_SOTA_SUMMARIES.md` for the external comparison table map.
 
-- `<data_root>/thermal_UD/images/` exists and non-empty
-- `<data_root>/thermal_UD/sparse/` exists
+Efficiency notes:
+- for all-method comparison, prefer `duration_s`, `core_model_mb`, and `artifact_mb`
+- `gaussian_count` and `ply_mb` only apply to Gaussian-representation methods
 
-The pipeline includes extension fallback by stem matching (`.jpg`/`.png`) for thermal image names.
+## Troubleshooting
 
-### 8.2 Extra IQA columns are `NaN`
+`thermal_UD seems incomplete`
+- check `<data_root>/thermal_UD/images/`
+- check `<data_root>/thermal_UD/sparse/`
+- the pipeline supports `.jpg` / `.png` stem matching
 
-Your IQA backend is missing/unavailable in current env.
+Extra IQA columns are `NaN`
+- install `pyiqa`, `piq`, `flip-evaluator`
+- rerun the metrics steps
 
-- install optional packages (`pyiqa`, `piq`, `flip-evaluator`)
-- rerun step 7/12 metrics
-
-### 8.3 Resume behaves unexpectedly
-
+Resume behaves unexpectedly
 - inspect `<data_root>/_pipeline_state/`
 - rerun with `--from_step ... --to_step ...`
-- add `--force` when marker/output status is inconsistent
+- add `--force` if markers and outputs disagree
 
----
+## License
 
-## 9) Notes for Reproducibility
+Built on top of Inria Gaussian Splatting. See `LICENSE.md`.
 
-- Keep one conda env per paper run (`fgs`) and freeze package versions.
-- Keep `--save_cmds` + profile/debug dumps for traceability.
-- For ablation comparability, avoid changing multiple defaults at once.
-
----
-
-## 10) License
-
-Built on top of Inria Gaussian Splatting; see `LICENSE.md` for terms.
