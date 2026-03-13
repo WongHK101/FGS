@@ -1646,6 +1646,7 @@ def main() -> None:
     need_ecc = (args.align == "ecc")
     need_dual = (args.align == "dual")
     need_raw = (args.align == "raw")
+    stress_fit_missing = (args.align == "fit" and bool(getattr(args, "cfr_exif_missing", False)))
 
     # -------- 1) CFR
     if args.clean_fit and fit_dir.exists():
@@ -1655,6 +1656,8 @@ def main() -> None:
     cfr_align = "both"
     if need_ecc:
         cfr_align = "all"
+    elif stress_fit_missing:
+        cfr_align = "fit"
     cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir),
                "--align", cfr_align, "--stage", "both"]
     cfr_cmd += ["--fit_k_mode", str(args.cfr_fit_k_mode)]
@@ -1670,10 +1673,13 @@ def main() -> None:
     if args.comparison:
         cfr_cmd.append("--comparison")
 
-    cfr_outputs_ok = (
-        cand_fit.exists() and cand_exif.exists() and
-        (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
-    )
+    if stress_fit_missing:
+        cfr_outputs_ok = cand_fit.exists() and (len(list_images(cand_fit)) > 0)
+    else:
+        cfr_outputs_ok = (
+            cand_fit.exists() and cand_exif.exists() and
+            (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
+        )
     if need_dual:
         cfr_outputs_ok = cfr_outputs_ok and cand_dual.exists() and th_dual.exists() and (
             (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
@@ -1694,10 +1700,13 @@ def main() -> None:
             ensure_dir(fit_dir)
             maybe_run(cfr_cmd, cwd=gs_root, step_name="01_cfr")
             # re-evaluate
-            cfr_outputs_ok = (
-                cand_fit.exists() and cand_exif.exists() and
-                (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
-            )
+            if stress_fit_missing:
+                cfr_outputs_ok = cand_fit.exists() and (len(list_images(cand_fit)) > 0)
+            else:
+                cfr_outputs_ok = (
+                    cand_fit.exists() and cand_exif.exists() and
+                    (len(list_images(cand_fit)) > 0) and (len(list_images(cand_exif)) > 0)
+                )
             if need_dual:
                 cfr_outputs_ok = cfr_outputs_ok and cand_dual.exists() and th_dual.exists() and (
                     (len(list_images(cand_dual)) > 0) and (len(list_images(th_dual)) > 0)
@@ -1705,7 +1714,10 @@ def main() -> None:
             if need_ecc:
                 cfr_outputs_ok = cfr_outputs_ok and cand_ecc.exists() and (len(list_images(cand_ecc)) > 0)
             if not cfr_outputs_ok:
-                need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}\n  {cand_exif}"
+                if stress_fit_missing:
+                    need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}"
+                else:
+                    need_msg = f"Expected cfr outputs missing. Need:\n  {cand_fit}\n  {cand_exif}"
                 if need_dual:
                     need_msg += f"\n  {cand_dual}\n  {th_dual}"
                 if need_ecc:
@@ -1745,6 +1757,15 @@ def main() -> None:
     if need_raw:
         eprint("[SKIP] 02_eval_crop (--align raw bypasses CFR candidate evaluation)")
         _record_step("02_eval_crop", "skip_raw", eval_cmd_base, outputs_ok=True, note=f"align=raw; src={rgb_dir}")
+    elif stress_fit_missing:
+        eprint("[SKIP] 02_eval_crop (stress_fit_missing skips fit/exif candidate evaluation)")
+        _record_step(
+            "02_eval_crop",
+            "skip_stress_fit_missing",
+            eval_cmd_base,
+            outputs_ok=True,
+            note="stress_fit_missing=True; skip step2 to avoid EXIF gate dependency",
+        )
     elif not _in_step_range(2):
 
         eprint("[SKIP] 02_eval_crop (outside selected step range)")
