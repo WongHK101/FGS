@@ -17,6 +17,7 @@ from scene.colmap_loader import read_extrinsics_binary, read_points3D_binary
 
 DATASETS = ["PVpanel", "Orchard", "Building", "Road", "TransmissionTower"]
 SETTINGS = ["fit", "exif_only", "raw_direct"]
+STEP2_METRICS = ["mi", "nmi", "grad_ncc", "edge_dice", "edge_f1", "grad_ssim"]
 
 
 def _warn(msg: str) -> None:
@@ -101,6 +102,25 @@ def _file_mb(path: Path) -> Optional[float]:
     return path.stat().st_size / (1024.0 * 1024.0)
 
 
+def _read_step2_metrics(metrics_root: Path) -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    data = _read_json(metrics_root / "crop_rgb" / "summary_all.json") or _read_json(metrics_root / "summary_all.json") or {}
+    candidates = data.get("candidates", []) if isinstance(data, dict) else []
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        tag = str(cand.get("tag", "")).strip().lower()
+        if not tag:
+            continue
+        out[f"S2_{tag}_count"] = cand.get("count")
+        mean = cand.get("mean", {})
+        if not isinstance(mean, dict):
+            continue
+        for key in STEP2_METRICS:
+            out[f"S2_{tag}_{key}"] = _safe_float(mean.get(key))
+    return out
+
+
 def _read_last_failure_reason(log_path: Path) -> str:
     if not log_path.exists():
         return ""
@@ -176,6 +196,7 @@ def _fit_row(dataset: str, input_root: Path, fit_root: Path) -> Dict[str, object
             "failure_reason": "",
         }
     )
+    row.update(_read_step2_metrics(data_root / "fit" / "metrics"))
     return row
 
 
@@ -210,6 +231,7 @@ def _smoke_row(dataset: str, setting: str, workdata_root: Path, runs_root: Path)
         }
     )
     row.update(_run_meta_summary(run_meta, data_root, out_root))
+    row.update(_read_step2_metrics(data_root / "fit" / "metrics"))
     return row
 
 
@@ -263,6 +285,23 @@ def _write_workbook(out_path: Path, all_rows: List[Dict[str, object]]) -> None:
         "failure_stage",
         "failure_reason",
     ]
+    step2_cols = [
+        "dataset",
+        "setting",
+        "status",
+        "S2_fit_count",
+        "S2_fit_mi",
+        "S2_fit_nmi",
+        "S2_fit_grad_ncc",
+        "S2_fit_edge_f1",
+        "S2_fit_grad_ssim",
+        "S2_exif_count",
+        "S2_exif_mi",
+        "S2_exif_nmi",
+        "S2_exif_grad_ncc",
+        "S2_exif_edge_f1",
+        "S2_exif_grad_ssim",
+    ]
     all_cols = [
         "dataset",
         "setting",
@@ -283,10 +322,25 @@ def _write_workbook(out_path: Path, all_rows: List[Dict[str, object]]) -> None:
         "duration_s",
         "failure_stage",
         "failure_reason",
+        "S2_fit_count",
+        "S2_fit_mi",
+        "S2_fit_nmi",
+        "S2_fit_grad_ncc",
+        "S2_fit_edge_dice",
+        "S2_fit_edge_f1",
+        "S2_fit_grad_ssim",
+        "S2_exif_count",
+        "S2_exif_mi",
+        "S2_exif_nmi",
+        "S2_exif_grad_ncc",
+        "S2_exif_edge_dice",
+        "S2_exif_edge_f1",
+        "S2_exif_grad_ssim",
     ]
 
     _sheet_from_rows(wb, "SfM", all_rows, sfm_cols)
     _sheet_from_rows(wb, "SmokeTrain", all_rows, smoke_cols)
+    _sheet_from_rows(wb, "Step2", all_rows, step2_cols)
     _sheet_from_rows(wb, "All", all_rows, all_cols)
 
     qa_ws = wb.create_sheet(title="QA")
@@ -338,6 +392,7 @@ def main() -> int:
     csv_path = out_dir / "CFR_Source.csv"
     xlsx_sfm = out_dir / "CFR_SfM.xlsx"
     xlsx_smoke = out_dir / "CFR_SmokeTrain.xlsx"
+    xlsx_step2 = out_dir / "CFR_Step2.xlsx"
     xlsx_all = out_dir / "CFR_AllInOne.xlsx"
     qa_path = out_dir / "CFR_QA.json"
 
@@ -356,6 +411,12 @@ def main() -> int:
             "dataset", "setting", "status", "stage1_train_complete", "stage2_train_complete",
             "stage1_ckpt_mb", "stage2_ckpt_mb", "duration_s", "failure_stage", "failure_reason"
         ]].to_excel(writer, index=False, sheet_name="SmokeTrain")
+    with pd.ExcelWriter(xlsx_step2, engine="openpyxl") as writer:
+        df[[
+            "dataset", "setting", "status",
+            "S2_fit_count", "S2_fit_mi", "S2_fit_nmi", "S2_fit_grad_ncc", "S2_fit_edge_f1", "S2_fit_grad_ssim",
+            "S2_exif_count", "S2_exif_mi", "S2_exif_nmi", "S2_exif_grad_ncc", "S2_exif_edge_f1", "S2_exif_grad_ssim",
+        ]].to_excel(writer, index=False, sheet_name="Step2")
 
     qa = {
         "rows": len(rows),
@@ -372,6 +433,7 @@ def main() -> int:
     print(f"[INFO] Wrote: {csv_path}")
     print(f"[INFO] Wrote: {xlsx_sfm}")
     print(f"[INFO] Wrote: {xlsx_smoke}")
+    print(f"[INFO] Wrote: {xlsx_step2}")
     print(f"[INFO] Wrote: {xlsx_all}")
     print(f"[INFO] Wrote: {qa_path}")
     return 0

@@ -765,6 +765,16 @@ def main() -> None:
 
     ap.add_argument("--align", default="fit", choices=["auto", "fit", "exif", "ecc", "dual", "raw"],
                     help="Which RGB source to use for COLMAP: aligned candidate or raw RGB (default: fit)")
+    ap.add_argument("--cfr_fit_k_mode", default="full", choices=["full", "no_kupdate", "naive_k"],
+                    help="Forward to cfr.py --fit_k_mode (default: full)")
+    ap.add_argument("--cfr_fit_agg_mode", default="median", choices=["median", "mean", "per_pair"],
+                    help="Forward to cfr.py --fit_agg_mode (default: median)")
+    ap.add_argument("--cfr_exif_noise_pct", type=float, default=0.0,
+                    help="Forward to cfr.py --exif_noise_pct (default: 0.0)")
+    ap.add_argument("--cfr_exif_missing", action="store_true", default=False,
+                    help="Forward to cfr.py --exif_missing (default: off)")
+    ap.add_argument("--cfr_exif_noise_seed", type=int, default=0,
+                    help="Forward to cfr.py --exif_noise_seed (default: 0)")
     ap.add_argument("--auto_pick_mode", default="robust", choices=["legacy", "robust"],
                     help="Auto-pick strategy when --align auto (default: robust)")
     ap.add_argument("--auto_pick_edge_f1_eps", type=float, default=0.002,
@@ -861,7 +871,9 @@ def main() -> None:
     ap.add_argument("--min_model_size", type=int, default=5)
     ap.add_argument("--init_min_num_inliers", type=int, default=50)
     ap.add_argument("--abs_pose_min_num_inliers", type=int, default=20)
-    ap.add_argument("--use_model_aligner", action="store_true", default=True)
+    ap.add_argument("--use_model_aligner", dest="use_model_aligner", action="store_true")
+    ap.add_argument("--no_use_model_aligner", dest="use_model_aligner", action="store_false")
+    ap.set_defaults(use_model_aligner=True)
     ap.add_argument("--model_aligner_args", default="--ref_is_gps=1 --alignment_type=enu --alignment_max_error=30.0")
     ap.add_argument("--prior_position_std_m", type=float, default=1.0)
     ap.add_argument("--wgs84_code", type=int, default=0)
@@ -1049,6 +1061,8 @@ def main() -> None:
         ap.error("--eval_montage_cols must be > 0")
     if args.eval_montage_samples < 0:
         ap.error("--eval_montage_samples must be >= 0")
+    if float(args.cfr_exif_noise_pct) < 0.0:
+        ap.error("--cfr_exif_noise_pct must be >= 0")
 
     # Validate improvement-4 params (always validated; only forwarded when enabled)
     if not math.isfinite(float(getattr(args, "t_struct_grad_w", 0.0))) or float(getattr(args, "t_struct_grad_w", 0.0)) < 0.0:
@@ -1490,6 +1504,11 @@ def main() -> None:
                 "eval_render_resolution": getattr(args, "eval_render_resolution", None),
                 "eval_render_extra": getattr(args, "eval_render_extra", None),
                 "eval_gt_mode": getattr(args, "eval_gt_mode", None),
+                "cfr_fit_k_mode": getattr(args, "cfr_fit_k_mode", None),
+                "cfr_fit_agg_mode": getattr(args, "cfr_fit_agg_mode", None),
+                "cfr_exif_noise_pct": getattr(args, "cfr_exif_noise_pct", None),
+                "cfr_exif_missing": bool(getattr(args, "cfr_exif_missing", False)),
+                "cfr_exif_noise_seed": getattr(args, "cfr_exif_noise_seed", None),
                 "dry_run": bool(getattr(args, "dry_run", False)),
             },
             "paths": {
@@ -1557,6 +1576,11 @@ def main() -> None:
                     "eval_montage_samples": getattr(args, "eval_montage_samples", None),
                     "eval_render_iter": getattr(args, "eval_render_iter", None),
                     "eval_render_source": getattr(args, "eval_render_source", None),
+                    "cfr_fit_k_mode": getattr(args, "cfr_fit_k_mode", None),
+                    "cfr_fit_agg_mode": getattr(args, "cfr_fit_agg_mode", None),
+                    "cfr_exif_noise_pct": getattr(args, "cfr_exif_noise_pct", None),
+                    "cfr_exif_missing": bool(getattr(args, "cfr_exif_missing", False)),
+                    "cfr_exif_noise_seed": getattr(args, "cfr_exif_noise_seed", None),
                     "novel_dump_sibr_ellipsoid": bool(getattr(args, "novel_dump_sibr_ellipsoid", False)),
                     "novel_sibr_exe": getattr(args, "novel_sibr_exe", None),
                     "novel_sibr_out_dir": getattr(args, "novel_sibr_out_dir", None),
@@ -1633,6 +1657,14 @@ def main() -> None:
         cfr_align = "all"
     cfr_cmd = [py, "cfr.py", "--rgb_dir", str(rgb_dir), "--th_dir", str(th_dir), "--out_dir", str(fit_dir),
                "--align", cfr_align, "--stage", "both"]
+    cfr_cmd += ["--fit_k_mode", str(args.cfr_fit_k_mode)]
+    cfr_cmd += ["--fit_agg_mode", str(args.cfr_fit_agg_mode)]
+    if float(args.cfr_exif_noise_pct) > 0.0:
+        cfr_cmd += ["--exif_noise_pct", str(args.cfr_exif_noise_pct)]
+    if bool(args.cfr_exif_missing):
+        cfr_cmd += ["--exif_missing"]
+    if int(args.cfr_exif_noise_seed) != 0:
+        cfr_cmd += ["--exif_noise_seed", str(args.cfr_exif_noise_seed)]
     if need_dual:
         cfr_cmd.append("--dual")
     if args.comparison:
@@ -1849,6 +1881,15 @@ def main() -> None:
 
     # -------- 4) COLMAP (convert-gtgs.py)
     sparse_aligned = data_root / "distorted" / "sparse_aligned"
+    sparse_fallback = data_root / "sparse" / "0"
+
+    def _pick_sparse_model_for_ud() -> Optional[Path]:
+        """Prefer aligned sparse model; fallback to sparse/0 when model aligner is disabled."""
+        if sparse_aligned.exists() and contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3):
+            return sparse_aligned
+        if sparse_fallback.exists() and contains_any_file(sparse_fallback, ("cameras.bin", "cameras.txt"), max_depth=1):
+            return sparse_fallback
+        return None
     convert_cmd = [
         py, "convert-gtgs.py",
         "-s", str(data_root),
@@ -1863,11 +1904,12 @@ def main() -> None:
         "--min_model_size", str(args.min_model_size),
         "--init_min_num_inliers", str(args.init_min_num_inliers),
         "--abs_pose_min_num_inliers", str(args.abs_pose_min_num_inliers),
-        "--use_model_aligner",
-        "--model_aligner_args", str(args.model_aligner_args),
     ]
+    if bool(args.use_model_aligner):
+        convert_cmd.extend(["--use_model_aligner", "--model_aligner_args", str(args.model_aligner_args)])
 
-    convert_outputs_ok = sparse_aligned.exists() and contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3)
+    sparse_model_for_ud = _pick_sparse_model_for_ud()
+    convert_outputs_ok = sparse_model_for_ud is not None
 
     if not _in_step_range(4):
 
@@ -1881,9 +1923,16 @@ def main() -> None:
             _record_step("04_convert_gtgs", "skip", convert_cmd, outputs_ok=convert_outputs_ok)
         else:
             maybe_run(convert_cmd, cwd=gs_root, step_name="04_convert_gtgs")
-            convert_outputs_ok = sparse_aligned.exists() and contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3)
+            sparse_model_for_ud = _pick_sparse_model_for_ud()
+            convert_outputs_ok = sparse_model_for_ud is not None
             if not convert_outputs_ok:
-                _maybe_raise_file_not_found(f"Aligned sparse model not found/invalid: {sparse_aligned}")
+                _maybe_raise_file_not_found(
+                    "Sparse model not found/invalid after convert step.\n"
+                    f"Checked aligned: {sparse_aligned}\n"
+                    f"Checked fallback: {sparse_fallback}"
+                )
+            elif sparse_model_for_ud != sparse_aligned:
+                eprint(f"[WARN] sparse_aligned missing; fallback to sparse model: {sparse_model_for_ud}")
             _record_step("04_convert_gtgs", "run", convert_cmd, outputs_ok=convert_outputs_ok)
             write_marker(marker_path(state_dir, "04_convert_gtgs"), "04_convert_gtgs", convert_cmd, cwd=gs_root)
 
@@ -2005,7 +2054,8 @@ def main() -> None:
 
     th_dir_for_ud_effective = th_dir_for_ud
     if _in_step_range(8):
-        model_names = _read_colmap_image_names(sparse_aligned)
+        sparse_model_for_ud = _pick_sparse_model_for_ud()
+        model_names = _read_colmap_image_names(sparse_model_for_ud) if sparse_model_for_ud is not None else []
         if model_names:
             thermal_names = {p.name for p in list_images(th_dir_for_ud)}
             missing_exact = [n for n in model_names if n not in thermal_names]
@@ -2035,17 +2085,19 @@ def main() -> None:
     undistort_cmd = [
         str(args.colmap), "image_undistorter",
         "--image_path", str(th_dir_for_ud_effective),
-        "--input_path", str(sparse_aligned),
+        "--input_path", str(sparse_model_for_ud if sparse_model_for_ud is not None else sparse_aligned),
         "--output_path", str(thermal_ud),
         "--output_type", "COLMAP",
     ]
     undistort_outputs_ok = thermal_ud.exists() and (thermal_ud / "images").exists() and (len(list_images(thermal_ud / "images")) > 0) and (thermal_ud / "sparse").exists()
     # Preflight: step 08 requires sparse_aligned from step 04
     if _in_step_range(8):
-        if not sparse_aligned.exists() or not contains_any_file(sparse_aligned, ("cameras.bin", "cameras.txt"), max_depth=3):
+        sparse_model_for_ud = _pick_sparse_model_for_ud()
+        if sparse_model_for_ud is None:
             _maybe_raise_file_not_found(
-                "Missing COLMAP sparse_aligned model required for thermal undistort.\n"
-                f"Expected: {sparse_aligned} (with cameras.bin/txt).\n"
+                "Missing COLMAP sparse model required for thermal undistort.\n"
+                f"Checked aligned: {sparse_aligned} (with cameras.bin/txt).\n"
+                f"Checked fallback: {sparse_fallback} (with cameras.bin/txt).\n"
                 "Run with --from_step 4 (or earlier), or fix your COLMAP outputs."
             )
         if not th_dir_for_ud_effective.exists():

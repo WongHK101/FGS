@@ -250,15 +250,28 @@ def exiftool_extract_gps(input_dir: Path, exiftool_exe: str):
         "-q", "-q",
         "-json",
         "-n",
+        # Ask exiftool for all groups so PNG EXIF/XMP GPS tags are not dropped.
+        "-G",
         "-GPSLatitude",
         "-GPSLongitude",
         "-GPSAltitude",
+        "-EXIF:GPSLatitude",
+        "-EXIF:GPSLongitude",
+        "-EXIF:GPSAltitude",
+        "-XMP:GPSLatitude",
+        "-XMP:GPSLongitude",
+        "-XMP:GPSAltitude",
+        "-Composite:GPSLatitude",
+        "-Composite:GPSLongitude",
+        "-Composite:GPSAltitude",
         "-XMP-drone-dji:AbsoluteAltitude",
         "-r",
         "-ext", "jpg",
         "-ext", "jpeg",
         "-ext", "JPG",
         "-ext", "JPEG",
+        "-ext", "png",
+        "-ext", "PNG",
         str(input_dir),
     ]
 
@@ -266,25 +279,51 @@ def exiftool_extract_gps(input_dir: Path, exiftool_exe: str):
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     text = p.stdout.decode("utf-8", errors="replace")
 
-    try:
-        records = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find('[')
-        end = text.rfind(']')
-        if start >= 0 and end > start:
-            records = json.loads(text[start:end + 1])
-        else:
-            raise
+    records = []
+    if text.strip():
+        try:
+            records = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find('[')
+            end = text.rfind(']')
+            if start >= 0 and end > start:
+                try:
+                    records = json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    log_warn("Exiftool output is not valid JSON after bracket recovery; treat as no GPS.")
+                    records = []
+            else:
+                log_warn("Exiftool output has no JSON payload; treat as no GPS.")
+                records = []
+    else:
+        log_warn("Exiftool returned empty output; treat as no GPS.")
 
     gps = {}
+    def _pick_tag(rec: Dict, names: List[str]):
+        # 1) exact key
+        for n in names:
+            if n in rec and rec[n] is not None:
+                return rec[n]
+        # 2) key suffix match (handles keys like "EXIF:GPSLatitude", "XMP:GPSLatitude")
+        rec_items = list(rec.items())
+        for n in names:
+            n_low = n.lower()
+            for k, v in rec_items:
+                if v is None:
+                    continue
+                ks = str(k).lower()
+                if ks == n_low or ks.endswith(":" + n_low):
+                    return v
+        return None
+
     for r in records:
         src = r.get("SourceFile", "")
         base = os.path.basename(src)
-        lat = r.get("GPSLatitude", None)
-        lon = r.get("GPSLongitude", None)
-        alt = r.get("GPSAltitude", None)
+        lat = _pick_tag(r, ["GPSLatitude"])
+        lon = _pick_tag(r, ["GPSLongitude"])
+        alt = _pick_tag(r, ["GPSAltitude"])
         if alt is None:
-            alt = r.get("AbsoluteAltitude", None)
+            alt = _pick_tag(r, ["AbsoluteAltitude", "RelativeAltitude"])
         if lat is None or lon is None or alt is None:
             continue
         if not (is_number(lat) and is_number(lon) and is_number(alt)):

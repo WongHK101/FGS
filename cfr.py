@@ -24,6 +24,7 @@ CLI 参数
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -336,6 +337,7 @@ def _exiftool_copy_then_patch(
     out_h: int,
     upd_dz: Optional[float],
     upd_f35: Optional[float],
+    k_mode: str,
     logger: Logger,
 ) -> bool:
     """v9: One-pass copy+patch with raw XMP packet injection.
@@ -352,6 +354,7 @@ def _exiftool_copy_then_patch(
         if xmp_xml:
             xmp_tmp = _write_temp_xmp(xmp_xml)
 
+        do_size_update = (k_mode != "no_kupdate")
         cmd: List[str] = [
             exiftool,
             "-overwrite_original",
@@ -372,13 +375,15 @@ def _exiftool_copy_then_patch(
             "-PreviewImage=",
             "-ThumbnailImage=",
             "-JpgFromRaw=",
-
-            # size fields (keep v8 policy: do NOT write PixelXDimension/YDimension)
-            f"-IFD0:ImageWidth={int(out_w)}",
-            f"-IFD0:ImageHeight={int(out_h)}",
-            f"-ExifIFD:ExifImageWidth={int(out_w)}",
-            f"-ExifIFD:ExifImageHeight={int(out_h)}",
         ]
+        if do_size_update:
+            # size fields (keep v8 policy: do NOT write PixelXDimension/YDimension)
+            cmd += [
+                f"-IFD0:ImageWidth={int(out_w)}",
+                f"-IFD0:ImageHeight={int(out_h)}",
+                f"-ExifIFD:ExifImageWidth={int(out_w)}",
+                f"-ExifIFD:ExifImageHeight={int(out_h)}",
+            ]
 
         if upd_dz is not None:
             cmd.append(f"-ExifIFD:DigitalZoomRatio={float(upd_dz):.10f}")
@@ -421,6 +426,7 @@ def save_with_metadata(
     out_w: int,
     out_h: int,
     zoom_factor: Optional[float],
+    k_mode: str,
     logger: Logger,
 ) -> None:
     """
@@ -433,9 +439,14 @@ def save_with_metadata(
     save_kwargs = dict(format="JPEG", quality=95, optimize=True, subsampling=2)
     pil.save(str(dst_path), **save_kwargs)
 
+    k_mode = str(k_mode).strip().lower()
+    if k_mode not in ("full", "no_kupdate", "naive_k"):
+        k_mode = "full"
+    do_zoom_update = (k_mode == "full")
+
     exiftool = find_exiftool()
     if exiftool:
-        upd_dz, upd_f35 = _compute_zoom_updates_for_crop(src_rgb_path, zoom_factor)
+        upd_dz, upd_f35 = _compute_zoom_updates_for_crop(src_rgb_path, zoom_factor) if do_zoom_update else (None, None)
         ok = _exiftool_copy_then_patch(
             exiftool=exiftool,
             src_rgb_path=src_rgb_path,
@@ -444,6 +455,7 @@ def save_with_metadata(
             out_h=out_h,
             upd_dz=upd_dz,
             upd_f35=upd_f35,
+            k_mode=k_mode,
             logger=logger,
         )
         if ok:
@@ -461,13 +473,15 @@ def save_with_metadata(
         # orientation + size
         try:
             ex["0th"][piexif.ImageIFD.Orientation] = 1
-            ex["0th"][piexif.ImageIFD.ImageWidth] = int(out_w)
-            ex["0th"][piexif.ImageIFD.ImageLength] = int(out_h)
+            if k_mode != "no_kupdate":
+                ex["0th"][piexif.ImageIFD.ImageWidth] = int(out_w)
+                ex["0th"][piexif.ImageIFD.ImageLength] = int(out_h)
         except Exception:
             pass
         try:
-            ex["Exif"][piexif.ExifIFD.ExifImageWidth] = int(out_w)
-            ex["Exif"][piexif.ExifIFD.ExifImageHeight] = int(out_h)
+            if k_mode != "no_kupdate":
+                ex["Exif"][piexif.ExifIFD.ExifImageWidth] = int(out_w)
+                ex["Exif"][piexif.ExifIFD.ExifImageHeight] = int(out_h)
         except Exception:
             pass
 
@@ -475,7 +489,7 @@ def save_with_metadata(
         ex["thumbnail"] = None
 
         # update zoom + f35
-        upd_dz, upd_f35 = _compute_zoom_updates_for_crop(src_rgb_path, zoom_factor)
+        upd_dz, upd_f35 = _compute_zoom_updates_for_crop(src_rgb_path, zoom_factor) if do_zoom_update else (None, None)
 
         if upd_dz is not None:
             try:
@@ -1403,6 +1417,44 @@ def robust_median(vals: List[float]) -> float:
     return float(np.median(np.array(vals, dtype=np.float32)))
 
 
+def robust_mean(vals: List[float]) -> float:
+    return float(np.mean(np.array(vals, dtype=np.float32)))
+
+
+def aggregate_fit_vals(vals: List[float], mode: str) -> float:
+    mode = str(mode).strip().lower()
+    if mode == "mean":
+        return robust_mean(vals)
+    return robust_median(vals)
+
+
+def _stable_rand01(tag: str, seed: int) -> float:
+    b = f"{seed}|{tag}".encode("utf-8", errors="ignore")
+    h = hashlib.md5(b).hexdigest()[:8]
+    return (int(h, 16) % 1000000) / 1000000.0
+
+
+def exif_perturb_zoom_ratio(
+    zr: Optional[float],
+    pair_stem: str,
+    *,
+    noise_pct: float,
+    missing: bool,
+    seed: int,
+) -> Optional[float]:
+    if zr is None or zr <= 0:
+        return None
+    if missing:
+        return None
+    p = float(noise_pct)
+    if p <= 0:
+        return float(zr)
+    u = _stable_rand01(pair_stem, seed)
+    scale = 1.0 + ((2.0 * u) - 1.0) * (p / 100.0)
+    scale = max(0.05, scale)
+    return float(zr) * float(scale)
+
+
 def output_rgb_filename(pair: PairItem) -> str:
     suf = pair.rgb_path.suffix.lower()
     if suf in {".jpg", ".jpeg"}:
@@ -1435,6 +1487,37 @@ def main() -> int:
                     help="Which aligned outputs to generate: exif/fit/ecc/both/all/raw (default both).")
     ap.add_argument("--stage", type=str, default="both", choices=["fit", "apply", "both"],
                     help="Which stages to run: fit/apply/both (default both).")
+    ap.add_argument(
+        "--fit_k_mode",
+        type=str,
+        default="full",
+        choices=["full", "no_kupdate", "naive_k"],
+        help="FIT metadata mode: full/no_kupdate/naive_k (default: full).",
+    )
+    ap.add_argument(
+        "--fit_agg_mode",
+        type=str,
+        default="median",
+        choices=["median", "mean", "per_pair"],
+        help="FIT aggregation mode: median/mean/per_pair (default: median).",
+    )
+    ap.add_argument(
+        "--exif_noise_pct",
+        type=float,
+        default=0.0,
+        help="Optional EXIF zoom perturbation percent (default: 0.0).",
+    )
+    ap.add_argument(
+        "--exif_missing",
+        action="store_true",
+        help="Force EXIF zoom missing (for robustness stress tests).",
+    )
+    ap.add_argument(
+        "--exif_noise_seed",
+        type=int,
+        default=0,
+        help="Seed for deterministic EXIF perturbation (default: 0).",
+    )
 
     # ECC / SfM-safe options (default OFF; only used when align includes ecc)
     ap.add_argument("--ecc_motion", type=str, default="homography", choices=["homography", "affine"],
@@ -1462,6 +1545,8 @@ def main() -> int:
                     help="Clamp |rotation| <= this value in degrees (default: 2).")
 
     args = ap.parse_args()
+    if float(args.exif_noise_pct) < 0.0:
+        ap.error("--exif_noise_pct must be >= 0")
 
     rgb_dir = Path(args.rgb_dir)
     th_dir = Path(args.th_dir)
@@ -1476,6 +1561,11 @@ def main() -> int:
     want_ecc = args.align in ("ecc", "all")
     do_fit = args.stage in ("fit", "both")
     do_apply = args.stage in ("apply", "both")
+    fit_k_mode = str(args.fit_k_mode).strip().lower()
+    fit_agg_mode = str(args.fit_agg_mode).strip().lower()
+    exif_noise_pct = float(args.exif_noise_pct)
+    exif_missing = bool(args.exif_missing)
+    exif_noise_seed = int(args.exif_noise_seed)
 
     ecc_motion = str(args.ecc_motion).strip().lower()
     ecc_init = str(args.ecc_init).strip().lower()
@@ -1529,6 +1619,12 @@ def main() -> int:
     logger.log("INFO", f"stage={args.stage} align={args.align} comparison={want_comp}")
     logger.log("INFO", f"piexif_installed={HAS_PIEXIF}")
     logger.log("INFO", f"exiftool_found={bool(find_exiftool())}")
+    logger.log("INFO", f"[FIT] agg_mode={fit_agg_mode} k_mode={fit_k_mode}")
+    if exif_missing or exif_noise_pct > 0.0:
+        logger.log(
+            "INFO",
+            f"[EXIF_STRESS] missing={exif_missing} noise_pct={exif_noise_pct:.3f} seed={exif_noise_seed}",
+        )
     if want_raw and args.comparison:
         logger.log("WARN", "[RAW] comparison output is ignored in --align raw mode.")
     if want_ecc:
@@ -1613,6 +1709,13 @@ def main() -> int:
             rgb_exif = read_exif_lens_info(p.rgb_path)
             th_exif = read_exif_lens_info(p.th_path)
             zr = compute_zoom_ratio(rgb_exif, th_exif)
+            zr = exif_perturb_zoom_ratio(
+                zr,
+                p.stem,
+                noise_pct=exif_noise_pct,
+                missing=exif_missing,
+                seed=exif_noise_seed,
+            )
             if zr is None or zr <= 0:
                 continue
             exif_ok_count += 1
@@ -1689,9 +1792,10 @@ def main() -> int:
                     fit_cy_med = 0.0
                     logger.log("ERROR", "[FIT] Too few OK fits and no EXIF. Fallback to fov=1.0.")
             else:
-                fit_fov_med = robust_median(ok_fovs)
-                fit_cx_med = robust_median(ok_cxoffs)
-                fit_cy_med = robust_median(ok_cyoffs)
+                agg_global = "median" if fit_agg_mode == "per_pair" else fit_agg_mode
+                fit_fov_med = aggregate_fit_vals(ok_fovs, agg_global)
+                fit_cx_med = aggregate_fit_vals(ok_cxoffs, agg_global)
+                fit_cy_med = aggregate_fit_vals(ok_cyoffs, agg_global)
 
             logger.log("INFO", f"[FIT] Done. time={t_fit:.1f}s ok={len(ok_fovs)}/{len(pairs)} "
                                f"fit_fov_med={fit_fov_med:.4f} fit_cx_off_med={fit_cx_med:.5f} fit_cy_off_med={fit_cy_med:.5f}")
@@ -1706,6 +1810,7 @@ def main() -> int:
                     "ok_count": int(len(ok_fovs)),
                     "total_count": int(len(pairs)),
                     "candidates": fov_candidates,
+                    "agg_mode": fit_agg_mode,
                 },
             }
             with open(model_fit_path, "w", encoding="utf-8") as f:
@@ -1721,6 +1826,7 @@ def main() -> int:
                 fit_fov_med = float(model_fit["fit"]["fov_frac_w"])
                 fit_cx_med = float(model_fit["fit"]["cx_off_frac"])
                 fit_cy_med = float(model_fit["fit"]["cy_off_frac"])
+                fit_agg_mode = str(model_fit.get("fit", {}).get("agg_mode", fit_agg_mode)).strip().lower()
                 logger.log("INFO", f"[FIT] Loaded model_fit.json fov={fit_fov_med:.4f} cx_off={fit_cx_med:.5f} cy_off={fit_cy_med:.5f}")
             except Exception as e:
                 logger.log("ERROR", f"[FIT] Failed to load model_fit.json: {e}")
@@ -1986,9 +2092,20 @@ def main() -> int:
             zoom_fit = None
 
             if need_fit_crop:
-                cx_fit = rgb_w / 2.0 + fit_cx_med * rgb_w
-                cy_fit = rgb_h / 2.0 + fit_cy_med * rgb_h
-                fit_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, float(fit_fov_med), cx_fit, cy_fit)
+                fit_fov_cur = float(fit_fov_med)
+                fit_cx_cur = float(fit_cx_med)
+                fit_cy_cur = float(fit_cy_med)
+                if fit_agg_mode == "per_pair":
+                    r_pair = estimate_fit_on_pair(rgb_bgr, th_bgr, th_size=th_size, fov_candidates=fov_candidates)
+                    if r_pair.ok and r_pair.fov_frac is not None and r_pair.cx_off_frac is not None and r_pair.cy_off_frac is not None:
+                        fit_fov_cur = float(r_pair.fov_frac)
+                        fit_cx_cur = float(r_pair.cx_off_frac)
+                        fit_cy_cur = float(r_pair.cy_off_frac)
+                    else:
+                        logger.log("WARN", f"[FIT] per_pair fallback to global on {pair.stem}: reason={r_pair.reason}")
+                cx_fit = rgb_w / 2.0 + fit_cx_cur * rgb_w
+                cy_fit = rgb_h / 2.0 + fit_cy_cur * rgb_h
+                fit_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, fit_fov_cur, cx_fit, cy_fit)
                 fit_crop_w = max(1, int(fit_box[2] - fit_box[0]))
                 zoom_fit = float(rgb_w) / float(fit_crop_w)
                 crop_fit = crop_with_pad(rgb_bgr, fit_box)
@@ -2001,6 +2118,13 @@ def main() -> int:
                 rgb_exif = read_exif_lens_info(pair.rgb_path)
                 th_exif = read_exif_lens_info(pair.th_path)
                 zr = compute_zoom_ratio(rgb_exif, th_exif)
+                zr = exif_perturb_zoom_ratio(
+                    zr,
+                    pair.stem,
+                    noise_pct=exif_noise_pct,
+                    missing=exif_missing,
+                    seed=exif_noise_seed,
+                )
                 if zr is not None and zr > 0:
                     fov_exif_w = 1.0 / zr
                     exif_box = crop_box_from_fov(rgb_w, rgb_h, th_w0, th_h0, float(fov_exif_w),
@@ -2360,19 +2484,19 @@ def main() -> int:
             # Save fit output
             if want_fit and img_fit is not None:
                 out_fit_path = img_fit_dir / out_name
-                save_with_metadata(pair.rgb_path, out_fit_path, img_fit, th_w0, th_h0, zoom_fit, logger)
+                save_with_metadata(pair.rgb_path, out_fit_path, img_fit, th_w0, th_h0, zoom_fit, fit_k_mode, logger)
                 fit_written += 1
 
             # Save exif output
             if want_exif and img_exif is not None and exif_usable:
                 out_exif_path = img_exif_dir / out_name
-                save_with_metadata(pair.rgb_path, out_exif_path, img_exif, th_w0, th_h0, zoom_exif, logger)
+                save_with_metadata(pair.rgb_path, out_exif_path, img_exif, th_w0, th_h0, zoom_exif, fit_k_mode, logger)
                 exif_written += 1
 
             # Save ecc output + sidecar
             if want_ecc and img_ecc is not None:
                 out_ecc_path = img_ecc_dir / out_name
-                save_with_metadata(pair.rgb_path, out_ecc_path, img_ecc, th_w0, th_h0, zoom_ecc, logger)
+                save_with_metadata(pair.rgb_path, out_ecc_path, img_ecc, th_w0, th_h0, zoom_ecc, fit_k_mode, logger)
                 ecc_written += 1
 
                 ecc_sidecar_path = sidecar_ecc_dir / f"{pair.stem}.json"
@@ -2411,7 +2535,7 @@ def main() -> int:
             # Save dual outputs + sidecar
             if want_dual and img_dual is not None:
                 out_dual_rgb_path = img_dual_dir / out_name
-                save_with_metadata(pair.rgb_path, out_dual_rgb_path, img_dual, th_w0, th_h0, zoom_dual, logger)
+                save_with_metadata(pair.rgb_path, out_dual_rgb_path, img_dual, th_w0, th_h0, zoom_dual, fit_k_mode, logger)
                 dual_rgb_written += 1
             if want_dual and th_dual is not None:
                 out_dual_th_path = th_dual_dir / output_th_filename(pair)
@@ -2632,6 +2756,11 @@ def main() -> int:
             "comparison": bool(want_comp),
             "align": args.align,
             "stage": args.stage,
+            "fit_k_mode": fit_k_mode,
+            "fit_agg_mode": fit_agg_mode,
+            "exif_noise_pct": float(exif_noise_pct),
+            "exif_missing": bool(exif_missing),
+            "exif_noise_seed": int(exif_noise_seed),
             "ecc_motion": ecc_motion if want_ecc else None,
             "ecc_init": ecc_init if want_ecc else None,
             "structure_mode": structure_mode if (want_ecc or want_dual) else None,
@@ -2684,13 +2813,21 @@ def main() -> int:
             "dual_th_written": int(dual_th_written),
         },
         "timing": {"fit_sec": round(float(t_fit), 3), "apply_sec": round(float(t_apply), 3)},
-        "exif_probe": {"usable": bool(exif_usable), "probe_ok": int(exif_ok_count), "probe_n": int(probe_n)},
+        "exif_probe": {
+            "usable": bool(exif_usable),
+            "probe_ok": int(exif_ok_count),
+            "probe_n": int(probe_n),
+            "noise_pct": float(exif_noise_pct),
+            "missing": bool(exif_missing),
+            "noise_seed": int(exif_noise_seed),
+        },
         "metadata_policy": {
             "read_pixels": "apply EXIF orientation to pixels via ImageOps.exif_transpose",
             "write_orientation": "force Orientation=1 (IFD0 + XMP-tiff) using 1-pass exiftool after raw XMP injection",
             "sizes": "write IFD0:ImageWidth/Height and ExifIFD:ExifImageWidth/Height only (no PixelXDimension/YDimension)",
             "digital_zoom": "DigitalZoomRatio *= zoom_factor",
             "f35mm": "FocalLengthIn35mmFormat *= zoom_factor (correct ExifTool tag name: Format)",
+            "fit_k_mode": fit_k_mode,
             "xmp": "copy -xmp:all and inject raw XMP packet from source JPEG (APP1) via exiftool -XMP<= (best effort for DJI namespaces)",
             "strip": "remove MPF/IFD1/Preview/Thumbnail blocks after crop/resize",
             "audit": "write debug/exif_audit-<suffix>.jsonl for orientation/size correctness + key GPS/XMP fields",
