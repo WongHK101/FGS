@@ -391,7 +391,7 @@ def main():
     ap.add_argument(
         "--dc_y_from",
         choices=["rgb", "t", "lerp"],
-        default="rgb",
+        default="lerp",
         help="Where DC luma Y comes from when using dc_ycc.",
     )
     ap.add_argument(

@@ -625,6 +625,7 @@ if __name__ == "__main__":
     parser.add_argument("--clamp_scale_after_rgb_final", action="store_true", default=False)
     parser.add_argument("--thermal_reset_features", action="store_true", default=False)
     parser.add_argument("--sgf_disable", action="store_true", default=False)
+    parser.add_argument("--baseline_modules_off", action="store_true", default=False)
 
     # Improved-4 (optional): pseudo-color thermal structure-gradient loss
     parser.add_argument("--t_struct_grad_w", type=float, default=0.0)
@@ -633,11 +634,23 @@ if __name__ == "__main__":
     cli_args = sys.argv[1:]
     args = parser.parse_args(cli_args)
 
+    if args.baseline_modules_off:
+        args.ss_enable = False
+        args.ss_prune_before_thermal = False
+        args.ss_prune_after_rgb = False
+        args.clamp_scale_max = None
+        args.clamp_scale_after_densify = False
+        args.clamp_scale_after_rgb_final = False
+        args.thermal_reset_features = False
+        args.t_struct_grad_w = 0.0
+        args.t_struct_grad_norm = True
+        args.sgf_disable = True
+
     # Thermal-stage default: if user did not explicitly pass --opacity_lr and a
     # checkpoint is provided, use a conservative opacity lr to avoid geometry drift.
     opacity_flag_set = any((a == "--opacity_lr") or a.startswith("--opacity_lr=") for a in cli_args)
     if args.start_checkpoint and (not opacity_flag_set):
-        args.opacity_lr = 2e-4
+        args.opacity_lr = 0.025 if args.baseline_modules_off else 2e-4
 
     args.save_iterations.append(args.iterations)
     if (not args.start_checkpoint) and args.ss_prune_after_rgb and (not args.ss_enable):

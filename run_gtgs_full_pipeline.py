@@ -48,6 +48,24 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+ORIG_3DGS_OPT_DEFAULTS: Dict[str, float] = {
+    "position_lr_init": 0.00016,
+    "position_lr_final": 0.0000016,
+    "position_lr_delay_mult": 0.01,
+    "position_lr_max_steps": 30000,
+    "feature_lr": 0.0025,
+    "opacity_lr": 0.025,
+    "scaling_lr": 0.005,
+    "rotation_lr": 0.001,
+    "lambda_dssim": 0.2,
+    "densification_interval": 100,
+    "opacity_reset_interval": 3000,
+    "densify_from_iter": 500,
+    "densify_until_iter": 15000,
+    "densify_grad_threshold": 0.0002,
+}
+
+
 # ----------------------------
 # Small utilities
 # ----------------------------
@@ -887,6 +905,12 @@ def main() -> None:
     ap.add_argument("--rgb_densify_grad", type=float, default=0.001)
     ap.add_argument("--rgb_lambda_dssim", type=float, default=0.3)
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    ap.add_argument(
+        "--baseline_modules_off",
+        action="store_true",
+        default=False,
+        help="Run full-pipeline baseline: disable repo improvements while keeping the current M01 recipe (except thermal opacity falls back to the original 3DGS value; default: off)",
+    )
 
     # Sparse Support (Improvement 1) - forwarded to train.py only when enabled
     ap.add_argument("--ss_enable", action="store_true", help="Enable sparse support gating (default: off)")
@@ -1019,6 +1043,8 @@ def main() -> None:
         "sh_only", "sh_opacity", "sh_opacity_scale", "sh_opacity_geom",
         "dc_ycc_only", "sh_opacity_dc_ycc"
     ])
+    ap.add_argument("--blend_dc_y_from", default="lerp", choices=["rgb", "t", "lerp"],
+                    help="Forward to blend_model_strict_endpoints.py --dc_y_from (default: lerp)")
     ap.add_argument("--verify_endpoints", action="store_true", default=True)
 
     # Eval sweep
@@ -1063,6 +1089,28 @@ def main() -> None:
         ap.error("--eval_montage_samples must be >= 0")
     if float(args.cfr_exif_noise_pct) < 0.0:
         ap.error("--cfr_exif_noise_pct must be >= 0")
+
+    if bool(getattr(args, "baseline_modules_off", False)):
+        # Preserve the current M01 recipe / protocol, but disable repository-specific
+        # algorithmic modules. Thermal opacity falls back to the original 3DGS
+        # value to remove the conservative-opacity improvement.
+        args.ss_enable = False
+        args.ss_enable_rgb = False
+        args.ss_enable_t = False
+        args.ss_adaptive_nn = False
+        args.ss_trim_tail_pct = 0.0
+        args.ss_drop_small_islands = 0
+        args.ss_prune_before_thermal = False
+        args.ss_prune_after_rgb = False
+        args.clamp_scale_max = None
+        args.clamp_scale_max_rgb = None
+        args.clamp_scale_after_rgb_final = False
+        args.clamp_scale_max_t = None
+        args.thermal_reset_features = False
+        args.t_struct_grad_w = 0.0
+        args.t_struct_grad_norm = True
+        args.sgf_disable = True
+        args.t_opacity_lr = float(ORIG_3DGS_OPT_DEFAULTS["opacity_lr"])
 
     # Validate improvement-4 params (always validated; only forwarded when enabled)
     if not math.isfinite(float(getattr(args, "t_struct_grad_w", 0.0))) or float(getattr(args, "t_struct_grad_w", 0.0)) < 0.0:
@@ -1457,6 +1505,7 @@ def main() -> None:
                 "ss_island_radius": getattr(args, "ss_island_radius", None),
                 "ss_prune_before_thermal": bool(getattr(args, "ss_prune_before_thermal", False)),
                 "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
+                "baseline_modules_off": bool(getattr(args, "baseline_modules_off", False)),
                 "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                 "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
                 "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
@@ -1560,6 +1609,7 @@ def main() -> None:
                     "ss_drop_small_islands": getattr(args, "ss_drop_small_islands", None),
                     "ss_island_radius": getattr(args, "ss_island_radius", None),
                     "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
+                    "baseline_modules_off": bool(getattr(args, "baseline_modules_off", False)),
                     "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                     "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
                     "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
@@ -1993,6 +2043,8 @@ def main() -> None:
         "--densify_grad_threshold", str(args.rgb_densify_grad),
         "--lambda_dssim", str(args.rgb_lambda_dssim),
     ]
+    if bool(getattr(args, "baseline_modules_off", False)):
+        train1_cmd.append("--baseline_modules_off")
 
     # Forward sparse support opts only when enabled for RGB stage.
     if ss_train_extra:
@@ -2185,23 +2237,24 @@ def main() -> None:
         "-r", str(args.t_res),
         "--iterations", str(args.t_iter),
         "--checkpoint_iterations", str(args.t_iter),
+    ]
+    if bool(getattr(args, "baseline_modules_off", False)):
+        train2_cmd.append("--baseline_modules_off")
 
-        # Freeze geometry-related params
+    train2_cmd.extend([
+        # Freeze geometry-related params under the current M01 recipe.
         "--position_lr_init", "0", "--position_lr_final", "0",
         "--scaling_lr", "0", "--rotation_lr", "0",
         "--opacity_lr", str(args.t_opacity_lr),
-
         "--feature_lr", str(args.t_feature_lr),
-
-        # Disable densification & opacity resets
+        # Disable densification & opacity resets under the current M01 recipe.
         "--densify_from_iter", "999999",
         "--densify_until_iter", "0",
         "--densification_interval", "999999",
         "--opacity_reset_interval", "999999",
-
         "--lambda_dssim", str(args.t_lambda_dssim),
         "--eval",
-    ]
+    ])
 
     if ss_train2_extra:
         train2_cmd.extend(ss_train2_extra)
@@ -2361,6 +2414,7 @@ def main() -> None:
         "--alphas", str(args.alphas),
         "--out_root", str(model_f),
         "--out_iter", str(args.t_iter),
+        "--dc_y_from", str(args.blend_dc_y_from),
         "--methods",
     ] + list(args.methods)
 
