@@ -911,6 +911,12 @@ def main() -> None:
         default=False,
         help="Run full-pipeline baseline: disable repo improvements while keeping the current M01 recipe (except thermal opacity falls back to the original 3DGS value; default: off)",
     )
+    ap.add_argument(
+        "--grouped_ablation_mode",
+        default="none",
+        choices=["none", "m00_plus_ssp", "m00_plus_stt"],
+        help="Selective grouped-ablation restore on top of --baseline_modules_off (default: none).",
+    )
 
     # Sparse Support (Improvement 1) - forwarded to train.py only when enabled
     ap.add_argument("--ss_enable", action="store_true", help="Enable sparse support gating (default: off)")
@@ -1089,6 +1095,8 @@ def main() -> None:
         ap.error("--eval_montage_samples must be >= 0")
     if float(args.cfr_exif_noise_pct) < 0.0:
         ap.error("--cfr_exif_noise_pct must be >= 0")
+    if args.grouped_ablation_mode != "none" and (not bool(getattr(args, "baseline_modules_off", False))):
+        ap.error("--grouped_ablation_mode requires --baseline_modules_off")
 
     if bool(getattr(args, "baseline_modules_off", False)):
         # Preserve the current M01 recipe / protocol, but disable repository-specific
@@ -1111,6 +1119,39 @@ def main() -> None:
         args.t_struct_grad_norm = True
         args.sgf_disable = True
         args.t_opacity_lr = float(ORIG_3DGS_OPT_DEFAULTS["opacity_lr"])
+
+        if args.grouped_ablation_mode == "m00_plus_ssp":
+            # Restore only the stage-1 SSP package on top of the baseline transfer recipe.
+            args.ss_enable = False
+            args.ss_enable_rgb = True
+            args.ss_enable_t = False
+            args.ss_source = "colmap_sparse"
+            args.ss_use_aabb = False
+            args.ss_aabb_margin = 0.0
+            args.ss_voxel_size = 1.5
+            args.ss_nn_dist_thr = 3.5
+            args.ss_adaptive_nn = True
+            args.ss_adaptive_alpha = 1.2
+            args.ss_adaptive_beta = 0.2
+            args.ss_adaptive_max_scale = 2.0
+            args.ss_trim_tail_pct = 0.0
+            args.ss_drop_small_islands = 10
+            args.ss_island_radius = 10.0
+            args.ss_prune_before_thermal = False
+            args.ss_prune_after_rgb = True
+        elif args.grouped_ablation_mode == "m00_plus_stt":
+            # Restore only the stage-2 STT package on top of the baseline transfer recipe.
+            args.ss_enable = False
+            args.ss_enable_rgb = False
+            args.ss_enable_t = False
+            args.ss_prune_before_thermal = False
+            args.ss_prune_after_rgb = False
+            args.clamp_scale_max_t = 10.0
+            args.thermal_reset_features = True
+            args.t_struct_grad_w = 0.006
+            args.t_struct_grad_norm = True
+            args.sgf_disable = False
+            args.t_opacity_lr = 2e-4
 
     # Validate improvement-4 params (always validated; only forwarded when enabled)
     if not math.isfinite(float(getattr(args, "t_struct_grad_w", 0.0))) or float(getattr(args, "t_struct_grad_w", 0.0)) < 0.0:
@@ -1506,6 +1547,7 @@ def main() -> None:
                 "ss_prune_before_thermal": bool(getattr(args, "ss_prune_before_thermal", False)),
                 "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                 "baseline_modules_off": bool(getattr(args, "baseline_modules_off", False)),
+                "grouped_ablation_mode": str(getattr(args, "grouped_ablation_mode", "none")),
                 "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                 "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
                 "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
@@ -1610,6 +1652,7 @@ def main() -> None:
                     "ss_island_radius": getattr(args, "ss_island_radius", None),
                     "ss_prune_after_rgb": bool(getattr(args, "ss_prune_after_rgb", False)),
                     "baseline_modules_off": bool(getattr(args, "baseline_modules_off", False)),
+                    "grouped_ablation_mode": str(getattr(args, "grouped_ablation_mode", "none")),
                     "clamp_scale_max": getattr(args, "clamp_scale_max", None),
                     "clamp_scale_max_rgb": getattr(args, "clamp_scale_max_rgb", None),
                     "clamp_scale_after_rgb_final": bool(getattr(args, "clamp_scale_after_rgb_final", False)),
@@ -2045,6 +2088,8 @@ def main() -> None:
     ]
     if bool(getattr(args, "baseline_modules_off", False)):
         train1_cmd.append("--baseline_modules_off")
+    if args.grouped_ablation_mode == "m00_plus_ssp":
+        train1_cmd.append("--baseline_restore_ssp")
 
     # Forward sparse support opts only when enabled for RGB stage.
     if ss_train_extra:
@@ -2240,6 +2285,8 @@ def main() -> None:
     ]
     if bool(getattr(args, "baseline_modules_off", False)):
         train2_cmd.append("--baseline_modules_off")
+    if args.grouped_ablation_mode == "m00_plus_stt":
+        train2_cmd.append("--baseline_restore_stt")
 
     train2_cmd.extend([
         # Freeze geometry-related params under the current M01 recipe.

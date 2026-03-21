@@ -626,6 +626,8 @@ if __name__ == "__main__":
     parser.add_argument("--thermal_reset_features", action="store_true", default=False)
     parser.add_argument("--sgf_disable", action="store_true", default=False)
     parser.add_argument("--baseline_modules_off", action="store_true", default=False)
+    parser.add_argument("--baseline_restore_ssp", action="store_true", default=False)
+    parser.add_argument("--baseline_restore_stt", action="store_true", default=False)
 
     # Improved-4 (optional): pseudo-color thermal structure-gradient loss
     parser.add_argument("--t_struct_grad_w", type=float, default=0.0)
@@ -633,6 +635,9 @@ if __name__ == "__main__":
 
     cli_args = sys.argv[1:]
     args = parser.parse_args(cli_args)
+
+    if (args.baseline_restore_ssp or args.baseline_restore_stt) and (not args.baseline_modules_off):
+        parser.error("--baseline_restore_ssp/--baseline_restore_stt require --baseline_modules_off")
 
     if args.baseline_modules_off:
         args.ss_enable = False
@@ -646,11 +651,40 @@ if __name__ == "__main__":
         args.t_struct_grad_norm = True
         args.sgf_disable = True
 
+    if args.baseline_restore_ssp:
+        # Selectively restore the stage-1 SSP package on top of the baseline transfer recipe.
+        args.ss_enable = True
+        args.ss_source = "colmap_sparse"
+        args.ss_use_aabb = False
+        args.ss_aabb_margin = 0.0
+        args.ss_voxel_size = 1.5
+        args.ss_nn_dist_thr = 3.5
+        args.ss_adaptive_nn = True
+        args.ss_adaptive_alpha = 1.2
+        args.ss_adaptive_beta = 0.2
+        args.ss_adaptive_max_scale = 2.0
+        args.ss_trim_tail_pct = 0.0
+        args.ss_drop_small_islands = 10
+        args.ss_island_radius = 10.0
+        args.ss_prune_after_rgb = True
+        args.ss_prune_before_thermal = False
+
+    if args.baseline_restore_stt:
+        # Selectively restore the stage-2 STT package on top of the baseline transfer recipe.
+        args.clamp_scale_max = 10.0
+        args.thermal_reset_features = True
+        args.t_struct_grad_w = 0.006
+        args.t_struct_grad_norm = True
+        args.sgf_disable = False
+
     # Thermal-stage default: if user did not explicitly pass --opacity_lr and a
     # checkpoint is provided, use a conservative opacity lr to avoid geometry drift.
     opacity_flag_set = any((a == "--opacity_lr") or a.startswith("--opacity_lr=") for a in cli_args)
     if args.start_checkpoint and (not opacity_flag_set):
-        args.opacity_lr = 0.025 if args.baseline_modules_off else 2e-4
+        if args.baseline_restore_stt:
+            args.opacity_lr = 2e-4
+        else:
+            args.opacity_lr = 0.025 if args.baseline_modules_off else 2e-4
 
     args.save_iterations.append(args.iterations)
     if (not args.start_checkpoint) and args.ss_prune_after_rgb and (not args.ss_enable):
