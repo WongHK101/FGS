@@ -1479,8 +1479,8 @@ def main() -> None:
     pipe = PipelineParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--N", type=int, default=60, help="Number of novel views (default: 60; mode=test_offset and N<=0 uses all test cams)")
-    parser.add_argument("--mode", type=str, default="orbit", choices=["orbit", "test_offset", "grid72"],
-                        help="Novel-view generation mode (default: orbit)")
+    parser.add_argument("--mode", type=str, default="grid72", choices=["orbit", "test_offset", "grid72"],
+                        help="Novel-view generation mode (default: grid72)")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for jittered modes")
     parser.add_argument("--bg", type=int, default=0, choices=[0, 1], help="Background color: 0=black, 1=white")
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"],
