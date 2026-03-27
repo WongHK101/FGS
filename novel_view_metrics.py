@@ -291,6 +291,34 @@ def _camera_center(cam) -> np.ndarray:
     return c2w[:3, 3].copy()
 
 
+def _project_to_plane(v: np.ndarray, normal: np.ndarray) -> np.ndarray:
+    n = _normalize(normal.astype(np.float32))
+    out = v.astype(np.float32) - float(np.dot(v, n)) * n
+    if float(np.linalg.norm(out)) < 1e-8:
+        return np.zeros((3,), dtype=np.float32)
+    return _normalize(out)
+
+
+def _aligned_axis_mean(vectors: List[np.ndarray]) -> np.ndarray:
+    valid: List[np.ndarray] = []
+    for v in vectors:
+        vn = _normalize(v.astype(np.float32))
+        if float(np.linalg.norm(vn)) >= 1e-8:
+            valid.append(vn)
+    if not valid:
+        return np.zeros((3,), dtype=np.float32)
+    ref = valid[0]
+    aligned: List[np.ndarray] = []
+    for v in valid:
+        if float(np.dot(v, ref)) < 0.0:
+            v = -v
+        aligned.append(v)
+    mean = _normalize(np.mean(np.stack(aligned, axis=0), axis=0).astype(np.float32))
+    if float(np.linalg.norm(mean)) < 1e-8:
+        mean = ref
+    return mean
+
+
 def _orthonormalize(R: np.ndarray) -> np.ndarray:
     u, _, vt = np.linalg.svd(R)
     r = u @ vt
@@ -1273,18 +1301,28 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
         raise RuntimeError("No cameras found to derive grid72 path.")
     ref_cam = cams[0]
     centers, center_scene, up_guess, cam_d50, cam_d90 = _camera_scene_reference(cams)
-    # Camera image-up convention in this repo is typically opposite to geometric "up".
-    # Use a camera-space up hint to avoid globally upside-down grid72 renders.
-    up_cam = -up_guess
+    geom_center, _geom_radius = _scene_center_radius(scene, gaussians)
+    render_center = geom_center.astype(np.float32) if np.all(np.isfinite(geom_center)) else center_scene
+    # Use the dominant training-camera image-up/image-right axes to stabilize roll.
+    # For aerial datasets like PVpanel, scene_up is close to world vertical and does not
+    # define the image-plane orientation; using it directly can rotate the whole grid.
     ref_ups = []
+    ref_rights = []
     for c in cams:
         _, c2w_ref = _camera_mats(c)
-        ref_ups.append(_normalize(c2w_ref[:3, 1].astype(np.float32)))
-    ref_ups = np.stack(ref_ups, axis=0)
-    # Use a global target up to keep all rendered frames consistently oriented.
-    up_ref = up_cam.copy()
-    if float(np.median(np.dot(ref_ups, up_ref))) < 0.0:
-        up_ref = -up_ref
+        ref_ups.append(_project_to_plane(c2w_ref[:3, 1].astype(np.float32), up_guess))
+        ref_rights.append(_project_to_plane(c2w_ref[:3, 0].astype(np.float32), up_guess))
+    _, ref_c2w = _camera_mats(ref_cam)
+    up_ref = _project_to_plane(ref_c2w[:3, 1].astype(np.float32), up_guess)
+    right_ref = _project_to_plane(ref_c2w[:3, 0].astype(np.float32), up_guess)
+    if float(np.linalg.norm(up_ref)) < 1e-8:
+        up_ref = _aligned_axis_mean(ref_ups)
+    if float(np.linalg.norm(right_ref)) < 1e-8:
+        right_ref = _aligned_axis_mean(ref_rights)
+    if float(np.linalg.norm(up_ref)) < 1e-8 and float(np.linalg.norm(right_ref)) >= 1e-8:
+        up_ref = _normalize(np.cross(up_guess, right_ref))
+    if float(np.linalg.norm(right_ref)) < 1e-8 and float(np.linalg.norm(up_ref)) >= 1e-8:
+        right_ref = _normalize(np.cross(up_ref, up_guess))
     azimuth_count = max(1, int(azimuth_count))
     pitches = sorted({float(np.clip(p, 5.0, 89.9)) for p in pitch_list})
     if not pitches:
@@ -1313,9 +1351,11 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
     dists = [near_d + f * span for f in factors]
 
     # Build horizontal basis from camera spread projected to the plane.
-    centered = centers - center_scene[None, :]
+    centered = centers - render_center[None, :]
     spread = centered - np.dot(centered, up_guess)[:, None] * up_guess[None, :]
-    if spread.shape[0] >= 3:
+    if float(np.linalg.norm(right_ref)) >= 1e-8:
+        h1 = right_ref.copy()
+    elif spread.shape[0] >= 3:
         _, _, vt_h = np.linalg.svd(spread, full_matrices=False)
         h1 = _normalize(vt_h[0].astype(np.float32))
     else:
@@ -1325,6 +1365,10 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
         if abs(float(np.dot(tmp, up_guess))) > 0.95:
             tmp = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         h1 = _normalize(tmp - float(np.dot(tmp, up_guess)) * up_guess)
+    if float(np.linalg.norm(up_ref)) >= 1e-8:
+        h2_try = _normalize(np.cross(up_guess, h1))
+        if float(np.dot(h2_try, up_ref)) < 0.0:
+            h1 = -h1
     h2 = _normalize(np.cross(up_guess, h1))
 
     # Use observed camera azimuths to avoid generating mostly out-of-coverage novel views.
@@ -1373,10 +1417,24 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
                 horiz = (math.cos(ar) * h1) + (math.sin(ar) * h2)
                 dir_center_to_cam = (math.cos(pr) * horiz) + (math.sin(pr) * up_guess)
                 dir_center_to_cam = _normalize(dir_center_to_cam)
-                cam_pos = center_scene + d * dir_center_to_cam
-                c2w_new = _build_c2w_lookat(cam_pos, center_scene, up_cam)
-                # Keep orientation globally consistent across all novel views.
-                if float(np.dot(_normalize(c2w_new[:3, 1]), up_ref)) < 0.0:
+                cam_pos = render_center + d * dir_center_to_cam
+                look_dir = _normalize(render_center - cam_pos)
+                right_hint = _project_to_plane(right_ref, look_dir)
+                if float(np.linalg.norm(right_hint)) < 1e-8:
+                    right_hint = _project_to_plane(h1, look_dir)
+                if float(np.linalg.norm(right_hint)) < 1e-8:
+                    up_hint = _project_to_plane(up_ref, look_dir)
+                    if float(np.linalg.norm(up_hint)) < 1e-8:
+                        up_hint = _project_to_plane(h2, look_dir)
+                    if float(np.linalg.norm(up_hint)) < 1e-8:
+                        up_hint = _project_to_plane(up_guess, look_dir)
+                    c2w_new = _build_c2w_lookat(cam_pos, render_center, up_hint)
+                else:
+                    c2w_new = _build_c2w_from_forward_right(cam_pos, look_dir, right_hint)
+                # Keep image-plane orientation globally consistent across the grid.
+                novel_right = _project_to_plane(c2w_new[:3, 0], look_dir)
+                ref_right = _project_to_plane(right_ref, look_dir)
+                if float(np.linalg.norm(ref_right)) >= 1e-8 and float(np.dot(novel_right, ref_right)) < 0.0:
                     c2w_new[:3, 0] *= -1.0
                     c2w_new[:3, 1] *= -1.0
                     roll_flip_count += 1
@@ -1412,9 +1470,11 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
         top_az = float(azimuths[0]) if len(azimuths) > 0 else 0.0
         top_ar = math.radians(top_az)
         top_right_hint = _normalize((math.cos(top_ar) * h1) + (math.sin(top_ar) * h2))
+        if float(np.linalg.norm(right_ref)) >= 1e-8:
+            top_right_hint = right_ref
         top_forward = _normalize(-top_dir)
         for dist_i, top_dist in enumerate(dists):
-            top_cam_pos = center_scene + top_dist * top_dir
+            top_cam_pos = render_center + top_dist * top_dir
             c2w_new = _build_c2w_from_forward_right(top_cam_pos, top_forward, top_right_hint)
             w2c_new = np.linalg.inv(c2w_new)
 
@@ -1436,6 +1496,7 @@ def _render_mode_grid72(scene: Scene, gaussians: GaussianModel, pipe, device: to
         "num_frames_target": int(len(azimuths) * len(pitches) * len(dists) + (len(dists) if include_topdown else 0)),
         "num_frames_selected": int(len(frames)),
         "scene_center": [float(center_scene[0]), float(center_scene[1]), float(center_scene[2])],
+        "render_center": [float(render_center[0]), float(render_center[1]), float(render_center[2])],
         "far_cover_distance": float(far_cover_d),
         "near_distance": float(near_d),
         "far_distance": float((near_d + 1.0 * span)),

@@ -827,8 +827,8 @@ def main() -> None:
                     help="IQA input space for metrics_plus.py (default: y)")
     ap.add_argument("--metrics_plus_extra_iqa_device", type=str, default="cuda", choices=["cpu", "cuda", "auto"],
                     help="IQA backend device for metrics_plus.py (default: cuda)")
-    ap.add_argument("--run_novel_view_metrics", action="store_true", default=True,
-                    help="Run novel_view_metrics.py after thermal metrics (default: on)")
+    ap.add_argument("--run_novel_view_metrics", action="store_true", default=False,
+                    help="Run novel_view_metrics.py after thermal metrics (default: off)")
     ap.add_argument("--novel_view_mode", type=str, default="grid72",
                     choices=["orbit", "test_offset", "grid72"],
                     help="Novel-view mode for novel_view_metrics.py (default: grid72)")
